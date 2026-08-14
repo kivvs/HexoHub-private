@@ -8,6 +8,7 @@ import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import rehypeRaw from 'rehype-raw';
 import 'katex/dist/katex.min.css';
 import { isTauri, isElectron } from '@/lib/desktop-api';
 import { fetchGiscusEmbedConfig, type GiscusEmbedConfig } from '@/lib/analytics-data';
@@ -595,7 +596,7 @@ export function MarkdownPreview({ content, className = '', previewMode = 'static
           <article className="max-w-none">
             <ReactMarkdown
               remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
-              rehypePlugins={[rehypeKatex]}
+              rehypePlugins={[rehypeRaw, rehypeKatex]}
               components={components}
             >
               {processedContent}

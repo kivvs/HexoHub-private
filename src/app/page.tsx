@@ -1008,6 +1008,10 @@ export default function Home() {
       const downloadedNames: string[] = [];
       const failedSources: string[] = [];
 
+      // 基于当前关联状态初始化累加器，循环内累加、结束后统一持久化
+      // （避免在循环内基于未更新的 state 展开导致关联被覆盖丢失）
+      const nextTags: Record<string, string> = { ...imageArticleTags };
+
       for (let index = 0; index < remoteMatches.length; index++) {
         const match = remoteMatches[index];
         const sequence = index + 1;
@@ -1037,10 +1041,8 @@ export default function Home() {
 
           downloadedNames.push(candidateName);
 
-          // 将图片关联到当前文章
-          const nextTags = { ...imageArticleTags };
+          // 将图片关联到当前文章（累加到本地状态，循环结束后统一保存）
           nextTags[candidateName] = postBaseName;
-          persistImageArticleTags(nextTags);
         } catch (error) {
           console.error(`提取图片失败 (${match.src}):`, error);
           failedSources.push(match.src);
@@ -1048,6 +1050,9 @@ export default function Home() {
       }
 
       if (downloadedNames.length > 0) {
+        // 统一持久化所有图片到当前文章的关联
+        persistImageArticleTags(nextTags);
+
         // 替换正文中的引用
         const newContent = replaceImageSources(postContent, replacements);
         setPostContent(newContent);
@@ -1058,8 +1063,8 @@ export default function Home() {
         toast({
           title: language === 'zh' ? '图片提取完成' : 'Images extracted',
           description: language === 'zh'
-            ? `已提取 ${downloadedNames.length} 张图片到 source/images${failedSources.length > 0 ? `，${failedSources.length} 张失败` : ''}`
-            : `${downloadedNames.length} image(s) saved to source/images${failedSources.length > 0 ? `, ${failedSources.length} failed` : ''}`,
+            ? `已提取 ${downloadedNames.length} 张图片到 source/images 并自动关联到「${postBaseName}」${failedSources.length > 0 ? `，${failedSources.length} 张失败` : ''}`
+            : `${downloadedNames.length} image(s) saved to source/images and linked to "${postBaseName}"${failedSources.length > 0 ? `, ${failedSources.length} failed` : ''}`,
           variant: failedSources.length > 0 ? 'default' : 'success',
         });
       } else {
