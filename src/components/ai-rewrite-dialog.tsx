@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Loader2, Copy, Check, RefreshCw } from 'lucide-react';
 import { getTexts } from '@/utils/i18n';
 import { isTauri } from '@/lib/desktop-api';
+import { buildAiApiUrl } from '@/lib/utils';
 
 interface AIRewriteDialogProps {
   open: boolean;
@@ -20,6 +21,7 @@ interface AIRewriteDialogProps {
   language: 'zh' | 'en';
   openaiModel?: string;
   openaiApiEndpoint?: string;
+  openaiApiPath?: string;
 }
 
 export function AIRewriteDialog({
@@ -32,7 +34,8 @@ export function AIRewriteDialog({
   apiKey,
   language,
   openaiModel = 'gpt-3.5-turbo',
-  openaiApiEndpoint = 'https://api.openai.com/v1'
+  openaiApiEndpoint = 'https://api.openai.com/v1',
+  openaiApiPath = '/chat/completions'
 }: AIRewriteDialogProps) {
   const [rewrittenText, setRewrittenText] = useState<string>('');
   const [isRewriting, setIsRewriting] = useState<boolean>(false);
@@ -93,17 +96,14 @@ export function AIRewriteDialog({
       }
 
       // 根据提供商选择API端点和模型
-      let apiUrl: string;
+      const apiUrl = buildAiApiUrl(aiProvider, openaiApiEndpoint, openaiApiPath);
       let model: string;
 
       if (aiProvider === 'deepseek') {
-        apiUrl = 'https://api.deepseek.com/v1/chat/completions';
         model = 'deepseek-chat';
       } else if (aiProvider === 'siliconflow') {
-        apiUrl = 'https://api.siliconflow.cn/v1/chat/completions';
         model = openaiModel || 'Qwen/Qwen2.5-7B-Instruct';
       } else {
-        apiUrl = `${openaiApiEndpoint}/chat/completions`;
         model = openaiModel || 'gpt-3.5-turbo';
       }
 
@@ -234,7 +234,7 @@ export function AIRewriteDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[75vw] max-w-[1300px] sm:max-w-[1300px] md:max-w-[1300px] lg:max-w-[1300px] max-h-[85vh] bg-white dark:bg-gray-800" style={{backgroundColor: "var(--background)", opacity: 1}}>
+      <DialogContent className="flex max-h-[85vh] w-[min(95vw,1300px)] max-w-[calc(100vw-2rem)] flex-col overflow-hidden bg-white dark:bg-gray-800" style={{backgroundColor: "var(--background)", opacity: 1}}>
         <DialogHeader>
           <DialogTitle className="flex items-center justify-between">
             <span>{getRewriteTitle()}</span>
@@ -252,21 +252,21 @@ export function AIRewriteDialog({
           </DialogTitle>
         </DialogHeader>
 
-        <div className="grid grid-cols-2 gap-6 overflow-auto">
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-auto lg:grid-cols-2 lg:gap-6">
           {/* 原文 */}
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             <Label className="text-sm font-semibold">
               {language === 'zh' ? '原文' : 'Original'}
             </Label>
             <Textarea
               value={selectedText}
               readOnly
-              className="min-h-[450px] max-h-[550px] resize-none bg-gray-50 dark:bg-gray-900"
+              className="min-h-[260px] max-h-[45vh] resize-none bg-gray-50 dark:bg-gray-900 lg:min-h-[420px]"
             />
           </div>
 
           {/* AI 改写结果 */}
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             <div className="flex items-center justify-between">
               <Label className="text-sm font-semibold">
                 {language === 'zh' ? 'AI 改写结果' : 'AI Rewrite Result'}
@@ -296,7 +296,7 @@ export function AIRewriteDialog({
               <Textarea
                 value={displayedText}
                 readOnly
-                className={`min-h-[450px] max-h-[550px] resize-none transition-all duration-300 ${
+                className={`min-h-[260px] max-h-[45vh] resize-none transition-all duration-300 lg:min-h-[420px] ${
                   isRewriting 
                     ? 'bg-blue-50 dark:bg-blue-950/50 ring-2 ring-blue-400/50 dark:ring-blue-600/50' 
                     : 'bg-gray-50 dark:bg-gray-900'

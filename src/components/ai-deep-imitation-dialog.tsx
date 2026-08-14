@@ -12,11 +12,12 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Copy, Check, RefreshCw, BookOpen } from 'lucide-react';
 import { getTexts } from '@/utils/i18n';
 import { isTauri } from '@/lib/desktop-api';
+import { buildAiApiUrl } from '@/lib/utils';
 
 interface Post {
   name: string;
   path: string;
-  modifiedTime: Date;
+  modifiedTime?: Date;
 }
 
 interface AIDeepImitationDialogProps {
@@ -31,6 +32,7 @@ interface AIDeepImitationDialogProps {
   language: 'zh' | 'en';
   openaiModel?: string;
   openaiApiEndpoint?: string;
+  openaiApiPath?: string;
 }
 
 export function AIDeepImitationDialog({
@@ -44,7 +46,8 @@ export function AIDeepImitationDialog({
   apiKey,
   language,
   openaiModel = 'gpt-3.5-turbo',
-  openaiApiEndpoint = 'https://api.openai.com/v1'
+  openaiApiEndpoint = 'https://api.openai.com/v1',
+  openaiApiPath = '/chat/completions'
 }: AIDeepImitationDialogProps) {
   const [title, setTitle] = useState<string>('');
   const [content, setContent] = useState<string>('');
@@ -158,17 +161,14 @@ ${referenceText}
 Please maintain a writing style similar to the reference articles, but the content should be based on the title and general content I provide. Only output the generated article, no explanations.`;
 
       // 根据提供商选择API端点和模型
-      let apiUrl: string;
+      const apiUrl = buildAiApiUrl(aiProvider, openaiApiEndpoint, openaiApiPath);
       let model: string;
 
       if (aiProvider === 'deepseek') {
-        apiUrl = 'https://api.deepseek.com/v1/chat/completions';
         model = 'deepseek-chat';
       } else if (aiProvider === 'siliconflow') {
-        apiUrl = 'https://api.siliconflow.cn/v1/chat/completions';
         model = openaiModel || 'Qwen/Qwen2.5-7B-Instruct';
       } else {
-        apiUrl = `${openaiApiEndpoint}/chat/completions`;
         model = openaiModel || 'gpt-3.5-turbo';
       }
 
@@ -289,7 +289,7 @@ Please maintain a writing style similar to the reference articles, but the conte
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] max-w-[1300px] sm:max-w-[1300px] md:max-w-[1300px] lg:max-w-[1300px] max-h-[90vh] bg-white dark:bg-gray-800 flex flex-col" style={{backgroundColor: "var(--background)", opacity: 1}}>
+      <DialogContent className="flex max-h-[90vh] w-[min(95vw,1300px)] max-w-[calc(100vw-2rem)] flex-col overflow-hidden bg-white dark:bg-gray-800" style={{backgroundColor: "var(--background)", opacity: 1}}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <BookOpen className="w-5 h-5" />
@@ -297,9 +297,9 @@ Please maintain a writing style similar to the reference articles, but the conte
           </DialogTitle>
         </DialogHeader>
 
-        <div className="grid grid-cols-2 gap-6 overflow-auto flex-1">
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-auto lg:grid-cols-2 lg:gap-6">
           {/* 左侧：输入参数 */}
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             <div className="space-y-2">
               <Label htmlFor="title" className="text-sm font-semibold">
                 {language === 'zh' ? '标题' : 'Title'}
@@ -365,7 +365,7 @@ Please maintain a writing style similar to the reference articles, but the conte
           </div>
 
           {/* 右侧：生成结果 */}
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             <div className="flex items-center justify-between">
               <Label className="text-sm font-semibold">
                 {language === 'zh' ? '生成结果' : 'Generated Result'}
@@ -395,7 +395,7 @@ Please maintain a writing style similar to the reference articles, but the conte
               <Textarea
                 value={displayedContent}
                 readOnly
-                className={`min-h-[450px] max-h-[550px] resize-none transition-all duration-300 ${
+                className={`min-h-[260px] max-h-[45vh] resize-none transition-all duration-300 lg:min-h-[420px] ${
                   isGenerating 
                     ? 'bg-blue-50 dark:bg-blue-950/50 ring-2 ring-blue-400/50 dark:ring-blue-600/50' 
                     : 'bg-gray-50 dark:bg-gray-900'
@@ -422,7 +422,7 @@ Please maintain a writing style similar to the reference articles, but the conte
           </div>
         </div>
 
-        <div className="flex justify-between items-center gap-2 mt-4 pt-4 border-t px-6">
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t px-2 pt-4 sm:px-6">
           <Button
             onClick={performGeneration}
             disabled={isGenerating || !title || !content || selectedPosts.length === 0}

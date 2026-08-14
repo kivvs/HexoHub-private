@@ -27,6 +27,7 @@ interface AIRewriteMenuProps {
   language: 'zh' | 'en';
   openaiModel?: string;
   openaiApiEndpoint?: string;
+  openaiApiPath?: string;
   enabled?: boolean;
   posts?: Post[];
   hexoPath?: string;
@@ -44,6 +45,7 @@ export function AIRewriteMenu({
   language,
   openaiModel = 'gpt-3.5-turbo',
   openaiApiEndpoint = 'https://api.openai.com/v1',
+  openaiApiPath = '/chat/completions',
   enabled = true,
   posts = [],
   hexoPath = '',
@@ -141,8 +143,9 @@ export function AIRewriteMenu({
         language={language}
         openaiModel={openaiModel}
         openaiApiEndpoint={openaiApiEndpoint}
+        openaiApiPath={openaiApiPath}
       />
-      
+
       {/* AI 深度模仿对话框 */}
       <AIDeepImitationDialog
         open={deepImitationDialogOpen}
@@ -156,6 +159,7 @@ export function AIRewriteMenu({
         language={language}
         openaiModel={openaiModel}
         openaiApiEndpoint={openaiApiEndpoint}
+        openaiApiPath={openaiApiPath}
       />
     </div>
   );

@@ -7,7 +7,7 @@
   "main": "public/electron.js",
   "homepage": "./",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 4001",
     "dev:socket": "nodemon --exec \"npx tsx server.ts\" --watch server.ts --watch src --ext ts,tsx,js,jsx 2>&1 | tee dev.log",
     "build": "next build",
     "start": "NODE_ENV=production tsx server.ts 2>&1 | tee server.log",
@@ -20,7 +20,7 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "electron": "npm run build && electron .",
-    "electron-dev": "concurrently \"npm run dev\" \"wait-on http://localhost:3000 && electron .\"",
+    "electron-dev": "concurrently \"npm run dev\" \"wait-on http://localhost:4001 && electron .\"",
     "package": "electron-builder --dir",
     "make": "electron-builder",
     "publish": "electron-builder --publish",

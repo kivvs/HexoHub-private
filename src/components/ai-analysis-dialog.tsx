@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Loader2, BarChart3, X } from 'lucide-react';
 import { getTexts } from '@/utils/i18n';
 import { isTauri } from '@/lib/desktop-api';
+import { buildAiApiUrl } from '@/lib/utils';
 
 interface AIAnalysisDialogProps {
   open: boolean;
@@ -20,9 +21,10 @@ interface AIAnalysisDialogProps {
   publishStatsData: any[];
   openaiModel?: string;
   openaiApiEndpoint?: string;
+  openaiApiPath?: string;
 }
 
-export function AIAnalysisDialog({ open, onOpenChange, aiProvider, apiKey, analysisPrompt, language, tagsData, publishStatsData, openaiModel = 'gpt-3.5-turbo', openaiApiEndpoint = 'https://api.openai.com/v1' }: AIAnalysisDialogProps) {
+export function AIAnalysisDialog({ open, onOpenChange, aiProvider, apiKey, analysisPrompt, language, tagsData, publishStatsData, openaiModel = 'gpt-3.5-turbo', openaiApiEndpoint = 'https://api.openai.com/v1', openaiApiPath = '/chat/completions' }: AIAnalysisDialogProps) {
   const [analysis, setAnalysis] = useState<string>('');
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [displayedText, setDisplayedText] = useState<string>('');
@@ -55,17 +57,14 @@ export function AIAnalysisDialog({ open, onOpenChange, aiProvider, apiKey, analy
       const finalPrompt = analysisPrompt.replace('{content}', content);
 
       // 根据提供商选择API端点和模型
-      let apiUrl: string;
+      const apiUrl = buildAiApiUrl(aiProvider, openaiApiEndpoint, openaiApiPath);
       let model: string;
-      
+
       if (aiProvider === 'deepseek') {
-        apiUrl = 'https://api.deepseek.com/v1/chat/completions';
         model = 'deepseek-chat';
       } else if (aiProvider === 'siliconflow') {
-        apiUrl = 'https://api.siliconflow.cn/v1/chat/completions';
         model = openaiModel || 'Qwen/Qwen2.5-7B-Instruct';
       } else {
-        apiUrl = `${openaiApiEndpoint}/chat/completions`;
         model = openaiModel || 'gpt-3.5-turbo';
       }
 

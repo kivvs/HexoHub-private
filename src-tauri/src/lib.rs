@@ -162,41 +162,39 @@ fn smart_decode(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).to_string()
 }
 
-// 执行命令（使用 Tauri Shell 插件，自动处理参数和引号）
+// 执行命令
+// 注意：使用 std::process::Command + raw_arg，而非 Tauri shell 插件。
+// Tauri shell 的 arg() 会把双引号转义为 \"，cmd /C 不识别 \" 转义，
+// 导致 git -C "path" 收到带字面双引号的路径而失败（fatal: cannot change to '"path"'）。
+// raw_arg 不做转义，直接把原始字符串放入命令行，cmd /C 正常解析双引号。
 #[tauri::command]
-async fn execute_command(command: String, app_handle: tauri::AppHandle) -> CommandResult {
-    use tauri_plugin_shell::ShellExt;
-    
-    // 使用 Tauri Shell 插件执行命令
-    // 优势：
-    // 1. 自动处理引号和转义问题
-    // 2. 跨平台兼容性好
-    // 3. 正确处理带空格的路径
-    let shell = app_handle.shell();
-    
-    let output_result = if cfg!(target_os = "windows") {
-        // Windows: 使用 cmd /C 执行命令
-        // Tauri shell 插件会正确处理参数，不会出现引号被当作路径的问题
-        shell
-            .command("cmd")
-            .args(["/C", &command])
-            .output()
-            .await
-    } else {
-        // Unix: 使用 sh -c 执行命令
-        shell
-            .command("sh")
-            .args(["-c", &command])
-            .output()
-            .await
-    };
-    
+async fn execute_command(command: String, _app_handle: tauri::AppHandle) -> CommandResult {
+    // 用 spawn_blocking 包裹同步的 Command::output()，避免阻塞异步运行时
+    let output_result = tokio::task::spawn_blocking(move || {
+        #[cfg(target_os = "windows")]
+        {
+            // Windows: raw_arg 传 "/C <原始命令>"，保留双引号原样
+            Command::new("cmd")
+                .raw_arg(format!("/C {}", command))
+                .output()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            // Unix: arg() 不会转义双引号，直接用
+            Command::new("sh")
+                .arg("-c")
+                .arg(&command)
+                .output()
+        }
+    })
+    .await;
+
     match output_result {
-        Ok(output) => {
+        Ok(Ok(output)) => {
             // 使用智能解码（自动检测 UTF-8/GBK）
             let stdout = smart_decode(&output.stdout);
             let stderr = smart_decode(&output.stderr);
-            
+
             CommandResult {
                 success: output.status.success(),
                 stdout: Some(stdout.clone()),
@@ -208,11 +206,17 @@ async fn execute_command(command: String, app_handle: tauri::AppHandle) -> Comma
                 },
             }
         },
-        Err(e) => CommandResult {
+        Ok(Err(e)) => CommandResult {
             success: false,
             stdout: None,
             stderr: None,
             error: Some(format!("命令执行错误: {}", e)),
+        },
+        Err(e) => CommandResult {
+            success: false,
+            stdout: None,
+            stderr: None,
+            error: Some(format!("任务执行错误: {}", e)),
         },
     }
 }

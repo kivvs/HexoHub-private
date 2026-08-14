@@ -5,7 +5,7 @@
   "identifier": "com.hexo.desktop",
   "build": {
     "frontendDist": "../out",
-    "devUrl": "http://localhost:3000",
+    "devUrl": "http://localhost:4001",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },
@@ -16,8 +16,8 @@
         "title": "HexoHub",
         "width": 1200,
         "height": 800,
-        "minWidth": 800,
-        "minHeight": 600,
+        "minWidth": 680,
+        "minHeight": 520,
         "resizable": true,
         "fullscreen": false,
         "decorations": false,
@@ -27,7 +27,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' ipc: http://ipc.localhost http://localhost:* ws://localhost:* http://* https://*; connect-src 'self' ipc: http://ipc.localhost http://localhost:* ws://localhost:* ws://* wss://* http://* https://*; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:*; style-src 'self' 'unsafe-inline' http://localhost:* http://* https://*; img-src 'self' asset: http://asset.localhost http://localhost:* data: blob: http://* https://*; font-src 'self' http://localhost:* data: http://* https://*; frame-src 'self' http://localhost:* http://127.0.0.1:* http://* https://*",
+      "csp": "default-src 'self' ipc: http://ipc.localhost http://localhost:* ws://localhost:* http://* https://*; connect-src 'self' ipc: http://ipc.localhost http://localhost:* ws://localhost:* ws://* wss://* http://* https://* https://api.github.com https://giscus.app; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* https://giscus.app; style-src 'self' 'unsafe-inline' http://localhost:* http://* https://* https://giscus.app; img-src 'self' asset: http://asset.localhost http://localhost:* data: blob: http://* https://* https://avatars.githubusercontent.com; font-src 'self' http://localhost:* data: http://* https://*; frame-src 'self' http://localhost:* http://127.0.0.1:* http://* https://* https://giscus.app",
       "assetProtocol": {
         "enable": true,
         "scope": [
@@ -38,7 +38,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
     "icon": [
       "icons/icon.icns",
       "icons/icon.ico",

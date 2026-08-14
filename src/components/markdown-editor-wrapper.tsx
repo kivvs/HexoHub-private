@@ -23,6 +23,7 @@ interface MarkdownEditorWrapperProps {
   apiKey?: string;
   openaiModel?: string;
   openaiApiEndpoint?: string;
+  openaiApiPath?: string;
 }
 
 // 根据环境自动选择合适的编辑器组件

@@ -203,6 +203,9 @@ export interface I18nTexts {
   backgroundImageDescription: string;
   backgroundOpacity: string;
   backgroundOpacityDescription: string;
+  imageBaseUrl: string;
+  imageBaseUrlPlaceholder: string;
+  imageBaseUrlDescription: string;
   readFileError: string;
   saveSettings: string;
   about: string;
@@ -299,6 +302,15 @@ export interface I18nTexts {
   pushFailed: string;
   pushing: string;
 
+  // 一键发布
+  oneClickPublish: string;
+  oneClickPublishStart: string;
+  oneClickPublishStep: string;
+  oneClickPublishSuccess: string;
+  oneClickPublishFailed: string;
+  oneClickPublishPushSkipped: string;
+  commitMessagePrefix: string;
+
   // 自定义指令设置
   enableCustomCommands: string;
   enableCustomCommandsDescription: string;
@@ -329,6 +341,9 @@ export interface I18nTexts {
   openaiModelPlaceholder: string;
   openaiApiEndpoint: string;
   openaiApiEndpointPlaceholder: string;
+  openaiApiPath: string;
+  openaiApiPathPlaceholder: string;
+  openaiApiPathDescription: string;
   siliconflow: string;
   siliconflowTooltip: string;
   siliconflowModel: string;
@@ -659,6 +674,9 @@ console.log('Hello, Hexo!');
     backgroundImageDescription: '输入图片URL或从本地选择图片作为背景',
     backgroundOpacity: '背景透明度',
     backgroundOpacityDescription: '调整背景透明度，0为完全透明，1为完全不透明',
+    imageBaseUrl: '图片基础地址',
+    imageBaseUrlPlaceholder: '默认：https://kivvs.github.io/images/',
+    imageBaseUrlDescription: '设置插入图片引用时使用的基础地址，仅保存在软件内。',
     readFileError: '读取文件失败，请确保文件路径正确且文件可访问',
     saveSettings: '保存设置',
     about: '关于',
@@ -755,6 +773,15 @@ console.log('Hello, Hexo!');
     pushFailed: '推送失败',
     pushing: '推送中...',
 
+    // 一键发布
+    oneClickPublish: '一键发布',
+    oneClickPublishStart: '即将顺序执行：清理 → 生成 → 部署 → 推送',
+    oneClickPublishStep: '第 {step}/{total} 步：{command}',
+    oneClickPublishSuccess: '一键发布全部完成',
+    oneClickPublishFailed: '第 {step} 步（{command}）失败，已停止后续步骤',
+    oneClickPublishPushSkipped: '推送配置不完整，已跳过推送步骤',
+    commitMessagePrefix: 'HexoHub 更新',
+
     // 自定义指令设置
     enableCustomCommands: '自定义指令',
     enableCustomCommandsDescription: '启用后可以自定义完整的Hexo命令',
@@ -784,7 +811,10 @@ console.log('Hello, Hexo!');
     openaiModel: 'OpenAI模型',
     openaiModelPlaceholder: '例如：gpt-3.5-turbo 或 gpt-4',
     openaiApiEndpoint: 'API端点',
-    openaiApiEndpointPlaceholder: '默认：https://api.openai.com/v1',
+    openaiApiEndpointPlaceholder: '默认：https://api.openai.com/v1（中转站填到 /v1 即可）',
+    openaiApiPath: 'API路径',
+    openaiApiPathPlaceholder: '默认：/chat/completions',
+    openaiApiPathDescription: '请求路径后缀。OpenAI 标准为 /chat/completions；若中转站端点不含 /v1 可填 /v1/chat/completions；也支持自定义路径如 /v1/messages。',
     siliconflow: '硅基流动',
     siliconflowTooltip: '硅基流动是一个高性价比的 AI 推理平台，提供 Qwen、GLM、DeepSeek 等多种开源大模型服务。支持按需付费，性能稳定可靠。点击跳转至硅基流动官网了解更多',
     siliconflowModel: '模型',
@@ -1114,6 +1144,9 @@ console.log('Hello, Hexo!');
     backgroundImageDescription: 'Enter image URL or select an image from local as background',
     backgroundOpacity: 'Background Opacity',
     backgroundOpacityDescription: 'Adjust background opacity, 0 is completely transparent, 1 is completely opaque',
+    imageBaseUrl: 'Image Base URL',
+    imageBaseUrlPlaceholder: 'Default: https://kivvs.github.io/images/',
+    imageBaseUrlDescription: 'Set the base URL used when inserting image references. It is stored only inside the app.',
     readFileError: 'Failed to read file, please ensure the file path is correct and accessible',
     saveSettings: 'Save Settings',
     about: 'About',
@@ -1210,6 +1243,15 @@ console.log('Hello, Hexo!');
     pushFailed: 'Push failed',
     pushing: 'Pushing...',
 
+    // One-Click Publish
+    oneClickPublish: 'One-Click Publish',
+    oneClickPublishStart: 'Running sequence: clean → generate → deploy → push',
+    oneClickPublishStep: 'Step {step}/{total}: {command}',
+    oneClickPublishSuccess: 'One-click publish completed',
+    oneClickPublishFailed: 'Step {step} ({command}) failed, aborted',
+    oneClickPublishPushSkipped: 'Push config incomplete, skipped push step',
+    commitMessagePrefix: 'HexoHub update',
+
     // 自定义指令设置
     enableCustomCommands: 'Custom Commands',
     enableCustomCommandsDescription: 'Enable to customize full Hexo commands',
@@ -1239,7 +1281,10 @@ console.log('Hello, Hexo!');
     openaiModel: 'OpenAI Model',
     openaiModelPlaceholder: 'e.g. gpt-3.5-turbo or gpt-4',
     openaiApiEndpoint: 'API Endpoint',
-    openaiApiEndpointPlaceholder: 'Default: https://api.openai.com/v1',
+    openaiApiEndpointPlaceholder: 'Default: https://api.openai.com/v1 (for proxy, fill up to /v1)',
+    openaiApiPath: 'API Path',
+    openaiApiPathPlaceholder: 'Default: /chat/completions',
+    openaiApiPathDescription: 'Request path suffix. OpenAI standard is /chat/completions; if the proxy endpoint does not include /v1, use /v1/chat/completions; custom paths like /v1/messages are also supported.',
     siliconflow: 'SiliconFlow',
     siliconflowTooltip: 'SiliconFlow is a cost-effective AI inference platform offering various open-source LLM services including Qwen, GLM, DeepSeek, etc. Pay-as-you-go pricing with stable and reliable performance. Click to learn more.',
     siliconflowModel: 'Model',

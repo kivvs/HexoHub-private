@@ -10,6 +10,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import { isTauri, isElectron } from '@/lib/desktop-api';
+import { fetchGiscusEmbedConfig, type GiscusEmbedConfig } from '@/lib/analytics-data';
 
 interface MarkdownPreviewProps {
   content: string;
@@ -22,9 +23,123 @@ interface MarkdownPreviewProps {
   forceRefresh?: boolean;
   onForceRefreshComplete?: () => void;
   iframeUrlMode?: 'hexo' | 'root';
+  giscusRepo?: string;
+  giscusCategory?: string;
+  giscusToken?: string;
+  language?: 'zh' | 'en';
 }
 
-export function MarkdownPreview({ content, className = '', previewMode = 'static', hexoPath, selectedPost, isServerRunning = false, onStartServer, forceRefresh = false, onForceRefreshComplete, iframeUrlMode = 'hexo' }: MarkdownPreviewProps) {
+interface GiscusCommentsProps {
+  repo?: string;
+  category?: string;
+  token?: string;
+  term: string;
+  language: 'zh' | 'en';
+}
+
+function GiscusComments({ repo = '', category = '', token = '', term, language }: GiscusCommentsProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [embedConfig, setEmbedConfig] = useState<GiscusEmbedConfig | null>(null);
+  const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error' | 'not-configured'>('idle');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadConfig = async () => {
+      if (!repo.trim() || !token.trim()) {
+        setStatus('not-configured');
+        setEmbedConfig(null);
+        return;
+      }
+
+      setStatus('loading');
+      setError('');
+
+      try {
+        const config = await fetchGiscusEmbedConfig({ repo, category, token });
+        if (!cancelled) {
+          setEmbedConfig(config);
+          setStatus('ready');
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
+          setStatus('error');
+          setEmbedConfig(null);
+        }
+      }
+    };
+
+    loadConfig();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [repo, category, token]);
+
+  useEffect(() => {
+    if (!containerRef.current || status !== 'ready' || !embedConfig) return;
+
+    const container = containerRef.current;
+    container.innerHTML = '';
+
+    const script = document.createElement('script');
+    script.src = 'https://giscus.app/client.js';
+    script.async = true;
+    script.crossOrigin = 'anonymous';
+    script.setAttribute('data-repo', embedConfig.repo);
+    script.setAttribute('data-repo-id', embedConfig.repoId);
+    script.setAttribute('data-category', embedConfig.category);
+    script.setAttribute('data-category-id', embedConfig.categoryId);
+    script.setAttribute('data-mapping', 'specific');
+    script.setAttribute('data-term', term || 'HexoHub Preview');
+    script.setAttribute('data-strict', '0');
+    script.setAttribute('data-reactions-enabled', '1');
+    script.setAttribute('data-emit-metadata', '0');
+    script.setAttribute('data-input-position', 'bottom');
+    script.setAttribute('data-theme', 'preferred_color_scheme');
+    script.setAttribute('data-lang', language === 'zh' ? 'zh-CN' : 'en');
+    script.setAttribute('data-loading', 'lazy');
+
+    container.appendChild(script);
+
+    return () => {
+      container.innerHTML = '';
+    };
+  }, [embedConfig, status, term, language]);
+
+  if (status === 'not-configured') {
+    return null;
+  }
+
+  return (
+    <section className="mt-10 rounded-2xl border border-blue-100/80 bg-white/80 p-5 shadow-sm dark:border-blue-900/60 dark:bg-slate-950/80">
+      <div className="mb-4 border-b border-dashed border-blue-200 pb-3 dark:border-blue-900/70">
+        <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+          {language === 'zh' ? '评论' : 'Comments'}
+        </h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {language === 'zh' ? '由 Giscus / GitHub Discussions 提供支持' : 'Powered by Giscus / GitHub Discussions'}
+        </p>
+      </div>
+
+      {status === 'loading' ? (
+        <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+          {language === 'zh' ? '正在加载评论框...' : 'Loading comments...'}
+        </div>
+      ) : status === 'error' ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+          {language === 'zh' ? '评论框加载失败：' : 'Failed to load comments: '}{error}
+        </div>
+      ) : (
+        <div ref={containerRef} className="giscus min-h-24" />
+      )}
+    </section>
+  );
+}
+
+export function MarkdownPreview({ content, className = '', previewMode = 'static', hexoPath, selectedPost, isServerRunning = false, onStartServer, forceRefresh = false, onForceRefreshComplete, iframeUrlMode = 'hexo', giscusRepo = '', giscusCategory = '', giscusToken = '', language = 'zh' }: MarkdownPreviewProps) {
   // 移除front matter
   const processedContent = content.replace(/^---\s*[\s\S]*?---\s*/, '');
   
@@ -151,28 +266,28 @@ export function MarkdownPreview({ content, className = '', previewMode = 'static
           style={tomorrow}
           language={match[1]}
           PreTag="div"
-          className="rounded-md text-sm"
+          className="rounded-xl border border-slate-700/60 text-sm shadow-sm"
           {...props}
         >
           {String(children).replace(/\n$/, '')}
         </SyntaxHighlighter>
       ) : (
-        <code className="bg-muted px-1 py-0.5 rounded text-sm font-mono text-foreground" {...props}>
+        <code className="rounded-md bg-blue-50 px-1.5 py-0.5 font-mono text-sm text-blue-700 ring-1 ring-blue-100 dark:bg-blue-950/70 dark:text-blue-300 dark:ring-blue-900/70" {...props}>
           {children}
         </code>
       );
     },
     blockquote({ children }: any) {
       return (
-        <blockquote className="border-l-4 border-border pl-4 italic my-4 text-muted-foreground">
+        <blockquote className="my-5 rounded-r-xl border-l-4 border-blue-500 bg-blue-50/80 px-4 py-3 italic text-slate-700 shadow-sm dark:bg-blue-950/30 dark:text-slate-300">
           {children}
         </blockquote>
       );
     },
     table({ children }: any) {
       return (
-        <div className="overflow-x-auto my-4">
-          <table className="min-w-full border border-border">
+        <div className="my-6 overflow-x-auto rounded-xl border border-border shadow-sm">
+          <table className="min-w-full border-collapse bg-background">
             {children}
           </table>
         </div>
@@ -180,35 +295,35 @@ export function MarkdownPreview({ content, className = '', previewMode = 'static
     },
     th({ children }: any) {
       return (
-        <th className="border border-border px-4 py-2 bg-muted text-left font-semibold text-foreground">
+        <th className="border-b border-r border-border bg-blue-50 px-4 py-2 text-left font-semibold text-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
           {children}
         </th>
       );
     },
     td({ children }: any) {
       return (
-        <td className="border border-border px-4 py-2 text-foreground">
+        <td className="border-b border-r border-border px-4 py-2 text-foreground">
           {children}
         </td>
       );
     },
     h1({ children }: any) {
       return (
-        <h1 className="text-3xl font-bold mt-8 mb-4 text-foreground border-b-2 border-border pb-2">
+        <h1 className="mt-2 mb-6 border-b-2 border-blue-200 pb-3 text-4xl font-extrabold tracking-tight text-slate-950 dark:border-blue-900/70 dark:text-slate-50">
           {children}
         </h1>
       );
     },
     h2({ children }: any) {
       return (
-        <h2 className="text-2xl font-semibold mt-6 mb-3 text-foreground">
+        <h2 className="mt-8 mb-4 border-l-4 border-blue-500 pl-3 text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
           {children}
         </h2>
       );
     },
     h3({ children }: any) {
       return (
-        <h3 className="text-xl font-medium mt-5 mb-2 text-foreground">
+        <h3 className="mt-6 mb-3 text-xl font-semibold text-blue-700 dark:text-blue-300">
           {children}
         </h3>
       );
@@ -236,28 +351,28 @@ export function MarkdownPreview({ content, className = '', previewMode = 'static
     },
     p({ children }: any) {
       return (
-        <p className="mb-4 leading-relaxed text-foreground">
+        <p className="mb-5 text-[15px] leading-8 text-slate-700 dark:text-slate-300">
           {children}
         </p>
       );
     },
     ul({ children }: any) {
       return (
-        <ul className="mb-4 space-y-1 text-foreground">
+        <ul className="mb-5 ml-6 list-disc space-y-2 text-slate-700 marker:text-blue-500 dark:text-slate-300">
           {children}
         </ul>
       );
     },
     ol({ children }: any) {
       return (
-        <ol className="mb-4 space-y-1 text-foreground list-decimal list-inside">
+        <ol className="mb-5 ml-6 list-decimal space-y-2 text-slate-700 marker:font-semibold marker:text-blue-500 dark:text-slate-300">
           {children}
         </ol>
       );
     },
     li({ children }: any) {
       return (
-        <li className="leading-relaxed">
+        <li className="pl-1 leading-7">
           {children}
         </li>
       );
@@ -266,7 +381,7 @@ export function MarkdownPreview({ content, className = '', previewMode = 'static
       return (
         <a 
           href={href} 
-          className="text-primary hover:text-primary/80 underline"
+          className="font-medium text-blue-600 underline decoration-blue-300 decoration-2 underline-offset-4 transition-colors hover:text-blue-500 dark:text-blue-400 dark:decoration-blue-800"
           target="_blank"
           rel="noopener noreferrer"
         >
@@ -301,7 +416,7 @@ export function MarkdownPreview({ content, className = '', previewMode = 'static
           <img 
             src={src} 
             alt={alt} 
-            className="max-w-full h-auto rounded-lg border border-border shadow-sm"
+            className="h-auto max-w-full rounded-xl border border-border bg-background shadow-lg"
           />
           {alt && (
             <p className="text-sm text-muted-foreground mt-2 text-center">
@@ -464,22 +579,43 @@ export function MarkdownPreview({ content, className = '', previewMode = 'static
   
   // 静态预览模式（默认）
   return (
-    <div className={`prose prose-sm max-w-none overflow-x-auto ${className}`} style={{ minWidth: 0, width: '100%', height: 'calc(100vh - 200px)', overflowY: 'auto' }}>
-      {content ? (
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
-          rehypePlugins={[rehypeKatex]}
-          components={components}
-        >
-          {processedContent}
-        </ReactMarkdown>
-      ) : (
-        <div className="text-center py-12 text-muted-foreground">
-          <div className="text-6xl mb-4">📝</div>
-          <h3 className="text-lg font-medium mb-2 text-foreground">暂无内容</h3>
-          <p className="text-sm">开始编写Markdown内容，这里将显示实时预览</p>
+    <div className={`h-full overflow-y-auto overflow-x-hidden ${className}`} style={{ minWidth: 0, width: '100%' }}>
+      <div className="mx-auto min-h-full max-w-4xl rounded-2xl border border-blue-100/80 bg-white/95 px-7 py-8 shadow-xl shadow-blue-950/10 ring-1 ring-black/5 backdrop-blur dark:border-blue-900/60 dark:bg-slate-950/95 dark:shadow-blue-950/30">
+        <div className="mb-6 flex items-center justify-between border-b border-dashed border-blue-200 pb-4 dark:border-blue-900/70">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-500 dark:text-blue-300">Rendered Preview</div>
+            <div className="mt-1 text-sm text-muted-foreground">Markdown 渲染结果</div>
+          </div>
+          <div className="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 ring-1 ring-blue-100 dark:bg-blue-950/60 dark:text-blue-300 dark:ring-blue-900/70">
+            Preview
+          </div>
         </div>
-      )}
+
+        {content ? (
+          <article className="max-w-none">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
+              rehypePlugins={[rehypeKatex]}
+              components={components}
+            >
+              {processedContent}
+            </ReactMarkdown>
+            <GiscusComments
+              repo={giscusRepo}
+              category={giscusCategory}
+              token={giscusToken}
+              term={selectedPost?.name || selectedPost?.path || 'HexoHub Preview'}
+              language={language}
+            />
+          </article>
+        ) : (
+          <div className="flex min-h-[360px] flex-col items-center justify-center rounded-xl border border-dashed border-blue-200 bg-blue-50/50 px-6 py-12 text-center text-muted-foreground dark:border-blue-900/70 dark:bg-blue-950/20">
+            <div className="text-6xl mb-4">📝</div>
+            <h3 className="text-lg font-medium mb-2 text-foreground">暂无内容</h3>
+            <p className="text-sm">开始编写Markdown内容，这里将显示实时预览</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

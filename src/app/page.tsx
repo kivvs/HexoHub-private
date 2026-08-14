@@ -43,6 +43,7 @@ import {
   ListOrdered,
   Link,
   Image,
+  Grid3X3,
   Table,
   Heading1,
   Heading2,
@@ -53,7 +54,11 @@ import {
   Upload,
   Lightbulb,
   BarChart3,
-  ExternalLink
+  ExternalLink,
+  Rocket,
+  RefreshCw,
+  Monitor,
+  Sparkles
 } from 'lucide-react';
 import { Language, getTexts } from '@/utils/i18n';
 import { MarkdownEditorWrapper } from '@/components/markdown-editor-wrapper';
@@ -64,6 +69,8 @@ import { CreatePostDialog } from '@/components/create-post-dialog';
 import { TagCloud } from '@/components/tag-cloud';
 import { PublishStats } from '@/components/publish-stats';
 import { PanelSettings } from '@/components/panel-settings';
+import { ExternalAnalyticsCards } from '@/components/external-analytics-cards';
+import { GiscusCommentsAnalyticsPage, Ga4ViewsAnalyticsPage } from '@/components/external-analytics-pages';
 import { useToast } from '@/hooks/use-toast';
 import { Toaster } from '@/components/ui/toaster';
 import { ToastAction } from '@/components/ui/toast';
@@ -73,7 +80,7 @@ import { AIInspirationDialog } from '@/components/ai-inspiration-dialog';
 import { AIAnalysisDialog } from '@/components/ai-analysis-dialog';
 import { getIpcRenderer, isDesktopApp, isTauri } from '@/lib/desktop-api';
 import { commandOperations } from '@/lib/tauri-api';
-import { normalizePath, normalizePathInternal } from '@/lib/utils';
+import { normalizePath, normalizePathInternal, escapeShellArg } from '@/lib/utils';
 
 interface Post {
   name: string;
@@ -84,11 +91,20 @@ interface Post {
   frontmatterDate?: Date;
 }
 
+interface UploadedImage {
+  name: string;
+  path: string;
+  size: number;
+  modifiedTime: Date;
+}
+
 interface CommandResult {
   success: boolean;
   stdout?: string;
   stderr?: string;
   error?: string;
+  timestamp?: string;
+  command?: string;
 }
 
 export default function Home() {
@@ -124,6 +140,12 @@ export default function Home() {
   // 背景图相关状态
   const [backgroundImage, setBackgroundImage] = useState<string>(''); // 背景图片URL
   const [backgroundOpacity, setBackgroundOpacity] = useState<number>(1); // 背景透明度
+  const [imageBaseUrl, setImageBaseUrl] = useState<string>('https://kivvs.github.io/images/'); // 图片引用基础地址
+  const [giscusRepo, setGiscusRepo] = useState<string>(''); // Giscus GitHub 仓库
+  const [giscusCategory, setGiscusCategory] = useState<string>(''); // Giscus Discussion 分类
+  const [giscusToken, setGiscusToken] = useState<string>(''); // GitHub Token，用于读取 Giscus 评论数据
+  const [ga4PropertyId, setGa4PropertyId] = useState<string>(''); // GA4 Property ID
+  const [ga4ServiceAccountJson, setGa4ServiceAccountJson] = useState<string>(''); // GA4 服务账号 JSON
   
   // 更新检查相关状态
   const [updateInfo, setUpdateInfo] = useState<any>(null);
@@ -163,9 +185,18 @@ export default function Home() {
   const [aiTranslatePrompt, setAiTranslatePrompt] = useState<string>('请直接将以下文本翻译成英文。只输出翻译结果，不要添加任何解释或说明'); // AI翻译提示词
   const [openaiModel, setOpenaiModel] = useState<string>('gpt-3.5-turbo'); // OpenAI模型
   const [openaiApiEndpoint, setOpenaiApiEndpoint] = useState<string>('https://api.openai.com/v1'); // OpenAI API端点
+  const [openaiApiPath, setOpenaiApiPath] = useState<string>('/chat/completions'); // OpenAI API请求路径后缀
   const [showInspirationDialog, setShowInspirationDialog] = useState<boolean>(false); // 是否显示灵感对话框
   const [showAnalysisDialog, setShowAnalysisDialog] = useState<boolean>(false); // 是否显示分析对话框
   const [showDeletePostDialog, setShowDeletePostDialog] = useState<boolean>(false); // 是否显示删除文章确认对话框
+  const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]); // Hexo source/images 目录图片
+  const [isUploadingImage, setIsUploadingImage] = useState<boolean>(false); // 图片上传状态
+  const [isImageDragOver, setIsImageDragOver] = useState<boolean>(false); // 图片管理卡片拖拽状态
+  const [imageViewMode, setImageViewMode] = useState<'list' | 'grid'>('grid'); // 图片展示模式
+  const [imageArticleTags, setImageArticleTags] = useState<Record<string, string>>({}); // 图片对应文章标签（仅软件内使用）
+  const [imageArticleFilter, setImageArticleFilter] = useState<string>('all'); // 图片文章标签筛选
+  const [showImagePickerDialog, setShowImagePickerDialog] = useState<boolean>(false); // 图片引用选择对话框
+  const imageManagerDropAreaRef = React.useRef<HTMLDivElement>(null); // 图片管理拖拽区域
   // 预览模式相关状态
   const [previewMode, setPreviewMode] = useState<'static' | 'server'>('static'); // 预览模式，默认为静态预览
   const [forcePreviewRefresh, setForcePreviewRefresh] = useState<boolean>(false); // 控制预览框强制刷新
@@ -399,6 +430,38 @@ export default function Home() {
             setBackgroundOpacity(value);
           }
         }
+
+        // 加载图片引用基础地址
+        const savedImageBaseUrl = localStorage.getItem('image-base-url');
+        if (savedImageBaseUrl !== null) {
+          setImageBaseUrl(savedImageBaseUrl);
+        }
+
+        // 加载外部数据统计配置
+        const savedGiscusRepo = localStorage.getItem('giscus-repo');
+        if (savedGiscusRepo !== null) {
+          setGiscusRepo(savedGiscusRepo);
+        }
+
+        const savedGiscusCategory = localStorage.getItem('giscus-category');
+        if (savedGiscusCategory !== null) {
+          setGiscusCategory(savedGiscusCategory);
+        }
+
+        const savedGiscusToken = localStorage.getItem('giscus-token');
+        if (savedGiscusToken !== null) {
+          setGiscusToken(savedGiscusToken);
+        }
+
+        const savedGa4PropertyId = localStorage.getItem('ga4-property-id');
+        if (savedGa4PropertyId !== null) {
+          setGa4PropertyId(savedGa4PropertyId);
+        }
+
+        const savedGa4ServiceAccountJson = localStorage.getItem('ga4-service-account-json');
+        if (savedGa4ServiceAccountJson !== null) {
+          setGa4ServiceAccountJson(savedGa4ServiceAccountJson);
+        }
         
         // 加载推送设置
         const savedEnablePush = localStorage.getItem('enable-push');
@@ -517,6 +580,11 @@ export default function Home() {
         const savedOpenaiApiEndpoint = localStorage.getItem('openai-api-endpoint');
         if (savedOpenaiApiEndpoint !== null) {
           setOpenaiApiEndpoint(savedOpenaiApiEndpoint);
+        }
+
+        const savedOpenaiApiPath = localStorage.getItem('openai-api-path');
+        if (savedOpenaiApiPath !== null) {
+          setOpenaiApiPath(savedOpenaiApiPath);
         }
 
         // 加载预览模式设置
@@ -706,7 +774,7 @@ export default function Home() {
       }
     } catch (error) {
       console.error('选择目录失败:', error);
-      setValidationMessage('选择目录失败: ' + error.message);
+      setValidationMessage('选择目录失败: ' + (error instanceof Error ? error.message : String(error)));
     }
   };
 
@@ -723,10 +791,450 @@ export default function Home() {
 
       if (result.valid) {
         await loadPosts(path);
+        await loadImageFiles(path);
+        loadImageArticleTags(path);
       }
     } catch (error) {
       console.error('验证项目失败:', error);
-      setValidationMessage('验证项目失败: ' + error.message);
+      setValidationMessage('验证项目失败: ' + (error instanceof Error ? error.message : String(error)));
+    }
+  };
+
+  const getImagesDirectoryPath = (projectPath: string = hexoPath) => `${projectPath}/source/images`;
+
+  const getImageArticleTagsStorageKey = (projectPath: string = hexoPath) => `hexohub:image-article-tags:${projectPath}`;
+
+  const loadImageArticleTags = (projectPath: string = hexoPath) => {
+    if (typeof window === 'undefined' || !projectPath) return;
+
+    try {
+      const savedTags = localStorage.getItem(getImageArticleTagsStorageKey(projectPath));
+      setImageArticleTags(savedTags ? JSON.parse(savedTags) : {});
+      setImageArticleFilter('all');
+    } catch (error) {
+      console.error('加载图片文章标签失败:', error);
+      setImageArticleTags({});
+    }
+  };
+
+  const persistImageArticleTags = (nextTags: Record<string, string>, projectPath: string = hexoPath) => {
+    setImageArticleTags(nextTags);
+
+    if (typeof window !== 'undefined' && projectPath) {
+      localStorage.setItem(getImageArticleTagsStorageKey(projectPath), JSON.stringify(nextTags));
+    }
+  };
+
+  const getImageArticleTag = (imageName: string) => imageArticleTags[imageName] || '';
+
+  const getNormalizedImageBaseUrl = (baseUrl: string) => {
+    const trimmed = baseUrl.trim();
+    if (!trimmed) {
+      return '';
+    }
+    return trimmed.endsWith('/') ? trimmed : `${trimmed}/`;
+  };
+
+  const getImageReferenceUrl = (imageName: string) => {
+    const baseUrl = getNormalizedImageBaseUrl(imageBaseUrl);
+    return `${baseUrl}${imageName}`;
+  };
+
+  const updateImageArticleTag = (imageName: string, articleTitle: string) => {
+    const nextTags = { ...imageArticleTags };
+
+    if (articleTitle) {
+      nextTags[imageName] = articleTitle;
+    } else {
+      delete nextTags[imageName];
+    }
+
+    persistImageArticleTags(nextTags);
+  };
+
+  const normalizeDesktopFileInfoTime = (modifiedTime: unknown): Date => {
+    if (modifiedTime instanceof Date) {
+      return modifiedTime;
+    }
+
+    if (typeof modifiedTime === 'string') {
+      const timestamp = parseInt(modifiedTime, 10);
+      return Number.isNaN(timestamp) ? new Date(0) : new Date(timestamp);
+    }
+
+    return new Date(0);
+  };
+
+  const isSupportedImageName = (name: string) => /\.(png|jpg|jpeg|gif|bmp|webp|svg)$/i.test(name);
+
+  const formatUploadedImageSize = (bytes: number) => {
+    if (!bytes) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    return `${(bytes / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+  };
+
+  const loadImageFiles = async (projectPath: string = hexoPath) => {
+    if (!isElectron || !projectPath) return;
+
+    try {
+      const ipcRenderer = await getIpcRenderer();
+      const imageDirectoryPath = getImagesDirectoryPath(projectPath);
+      const files = await ipcRenderer.invoke('list-files', imageDirectoryPath);
+      const imageFiles = files
+        .filter((file: any) => !file.isDirectory && isSupportedImageName(file.name))
+        .map((file: any) => ({
+          name: file.name,
+          path: file.path,
+          size: file.size || 0,
+          modifiedTime: normalizeDesktopFileInfoTime(file.modifiedTime),
+        }))
+        .sort((a: UploadedImage, b: UploadedImage) => b.modifiedTime.getTime() - a.modifiedTime.getTime());
+
+      setUploadedImages(imageFiles);
+    } catch (error) {
+      console.warn('加载图片列表失败，可能是 source/images 目录尚未创建:', error);
+      setUploadedImages([]);
+    }
+  };
+
+  const copyImagePathToSourceImages = async (sourceImagePath: string) => {
+    const normalizedSourceImagePath = normalizePath(sourceImagePath);
+    const imageName = normalizedSourceImagePath.split(/[\\/]/).pop();
+
+    if (!imageName || !isSupportedImageName(imageName)) {
+      throw new Error(language === 'zh' ? '请选择有效的图片文件' : 'Please select a valid image file');
+    }
+
+    const ipcRenderer = await getIpcRenderer();
+    const destinationPath = `${getImagesDirectoryPath()}/${imageName}`;
+    await ipcRenderer.invoke('copy-file', normalizedSourceImagePath, destinationPath);
+    return imageName;
+  };
+
+  const writeDroppedImageToSourceImages = async (file: File) => {
+    if (!isSupportedImageName(file.name)) {
+      throw new Error(language === 'zh' ? '仅支持图片文件' : 'Only image files are supported');
+    }
+
+    const filePath = (file as any).path;
+    if (filePath) {
+      return copyImagePathToSourceImages(filePath);
+    }
+
+    if (isTauri()) {
+      throw new Error(language === 'zh' ? '当前环境拖拽上传需要文件路径，请使用“上传图片”按钮选择文件' : 'Drag upload in this environment requires a file path. Please use the upload button.');
+    }
+
+    const ipcRenderer = await getIpcRenderer();
+    const destinationPath = `${getImagesDirectoryPath()}/${file.name}`;
+    const fileContent = await file.arrayBuffer();
+    await ipcRenderer.invoke('write-file-from-buffer', destinationPath, new Uint8Array(fileContent));
+    return file.name;
+  };
+
+  const uploadImageToSourceImages = async () => {
+    if (!isElectron || !hexoPath) {
+      toast({
+        title: t.failed,
+        description: t.selectValidHexoProject,
+        variant: 'error',
+      });
+      return;
+    }
+
+    setIsUploadingImage(true);
+
+    try {
+      const ipcRenderer = await getIpcRenderer();
+      const selectedImagePath = await ipcRenderer.invoke('select-file');
+
+      if (!selectedImagePath) return;
+
+      const imageName = await copyImagePathToSourceImages(String(selectedImagePath));
+      await loadImageFiles(hexoPath);
+
+      toast({
+        title: t.success,
+        description: language === 'zh' ? `图片已上传到 source/images/${imageName}` : `Image uploaded to source/images/${imageName}`,
+        variant: 'success',
+      });
+    } catch (error) {
+      console.error('上传图片失败:', error);
+      toast({
+        title: t.failed,
+        description: language === 'zh' ? `上传图片失败: ${error instanceof Error ? error.message : String(error)}` : `Failed to upload image: ${error instanceof Error ? error.message : String(error)}`,
+        variant: 'error',
+      });
+    } finally {
+      setIsUploadingImage(false);
+    }
+  };
+
+  const handleImageDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!isUploadingImage) {
+      setIsImageDragOver(true);
+    }
+  };
+
+  const handleImageDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsImageDragOver(false);
+  };
+
+  const handleImageDrop = async (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsImageDragOver(false);
+
+    if (!isElectron || !hexoPath) return;
+
+    const imageFiles = Array.from(event.dataTransfer.files).filter((file) => isSupportedImageName(file.name));
+    if (imageFiles.length === 0) {
+      toast({
+        title: t.failed,
+        description: language === 'zh' ? '请拖入图片文件' : 'Please drop image files',
+        variant: 'error',
+      });
+      return;
+    }
+
+    setIsUploadingImage(true);
+
+    try {
+      const uploadedNames: string[] = [];
+      for (const file of imageFiles) {
+        const imageName = await writeDroppedImageToSourceImages(file);
+        uploadedNames.push(imageName);
+      }
+
+      await loadImageFiles(hexoPath);
+
+      toast({
+        title: t.success,
+        description: language === 'zh' ? `已拖拽上传 ${uploadedNames.length} 张图片` : `${uploadedNames.length} image(s) uploaded by drag and drop`,
+        variant: 'success',
+      });
+    } catch (error) {
+      console.error('拖拽上传图片失败:', error);
+      toast({
+        title: t.failed,
+        description: language === 'zh' ? `拖拽上传失败: ${error instanceof Error ? error.message : String(error)}` : `Drag upload failed: ${error instanceof Error ? error.message : String(error)}`,
+        variant: 'error',
+      });
+    } finally {
+      setIsUploadingImage(false);
+    }
+  };
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    const setupTauriImageDragDrop = async () => {
+      if (!isElectron || !hexoPath || !isTauri()) return;
+
+      try {
+        const { getCurrentWebview } = await import('@tauri-apps/api/webview');
+        const webview = getCurrentWebview();
+
+        unlisten = await webview.onDragDropEvent(async (event) => {
+          const { payload } = event;
+
+          if (payload.type === 'over') {
+            const dropArea = imageManagerDropAreaRef.current;
+            if (!dropArea) return;
+
+            const { left, right, top, bottom } = dropArea.getBoundingClientRect();
+            const { x, y } = payload.position;
+            setIsImageDragOver(x >= left && x <= right && y >= top && y <= bottom);
+            return;
+          }
+
+          if (payload.type !== 'drop') {
+            setIsImageDragOver(false);
+            return;
+          }
+
+          const dropArea = imageManagerDropAreaRef.current;
+          setIsImageDragOver(false);
+          if (!dropArea) return;
+
+          const { left, right, top, bottom } = dropArea.getBoundingClientRect();
+          const { x, y } = payload.position;
+          const isInDropArea = x >= left && x <= right && y >= top && y <= bottom;
+          if (!isInDropArea) return;
+
+          const imagePaths = (payload.paths || []).filter((filePath) => isSupportedImageName(filePath));
+          if (imagePaths.length === 0) {
+            toast({
+              title: t.failed,
+              description: language === 'zh' ? '请拖入图片文件' : 'Please drop image files',
+              variant: 'error',
+            });
+            return;
+          }
+
+          setIsUploadingImage(true);
+
+          try {
+            for (const imagePath of imagePaths) {
+              await copyImagePathToSourceImages(imagePath);
+            }
+
+            await loadImageFiles(hexoPath);
+            toast({
+              title: t.success,
+              description: language === 'zh' ? `已拖拽上传 ${imagePaths.length} 张图片` : `${imagePaths.length} image(s) uploaded by drag and drop`,
+              variant: 'success',
+            });
+          } catch (error) {
+            console.error('Tauri 拖拽上传图片失败:', error);
+            toast({
+              title: t.failed,
+              description: language === 'zh' ? `拖拽上传失败: ${error instanceof Error ? error.message : String(error)}` : `Drag upload failed: ${error instanceof Error ? error.message : String(error)}`,
+              variant: 'error',
+            });
+          } finally {
+            setIsUploadingImage(false);
+          }
+        });
+      } catch (error) {
+        console.error('设置图片管理 Tauri 拖拽监听失败:', error);
+      }
+    };
+
+    setupTauriImageDragDrop();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [hexoPath, isElectron, language, t.failed, t.success]);
+
+  const insertImageReference = (imageName: string) => {
+    const textarea = document.querySelector('textarea');
+    const insertText = `![](${getImageReferenceUrl(imageName)})`;
+
+    if (textarea) {
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const newValue = postContent.substring(0, start) + insertText + postContent.substring(end);
+      setPostContent(newValue);
+
+      setTimeout(() => {
+        textarea.selectionStart = textarea.selectionEnd = start + insertText.length;
+        textarea.focus();
+      }, 0);
+    } else {
+      setPostContent(prev => `${prev}${prev.endsWith('\n') || prev.length === 0 ? '' : '\n'}${insertText}`);
+    }
+
+    setShowImagePickerDialog(false);
+  };
+
+  const normalizeImageRename = (oldName: string, inputName: string) => {
+    const safeName = inputName.trim().replace(/[\\/]/g, '-');
+    if (!safeName) return '';
+
+    if (isSupportedImageName(safeName)) {
+      return safeName;
+    }
+
+    const extension = oldName.match(/\.[^.]+$/)?.[0] || '';
+    return `${safeName.replace(/\.[^.]*$/, '')}${extension}`;
+  };
+
+  const renameUploadedImage = async (image: UploadedImage) => {
+    if (!isElectron || !hexoPath) return;
+
+    const rawName = window.prompt(
+      language === 'zh' ? '请输入新的图片名称（可不填扩展名）' : 'Enter a new image name (extension optional)',
+      image.name
+    );
+
+    if (rawName === null) return;
+
+    const newName = normalizeImageRename(image.name, rawName);
+    if (!newName || newName === image.name) return;
+
+    if (uploadedImages.some((item) => item.name === newName)) {
+      toast({
+        title: t.failed,
+        description: language === 'zh' ? '已存在同名图片' : 'An image with the same name already exists',
+        variant: 'error',
+      });
+      return;
+    }
+
+    try {
+      const ipcRenderer = await getIpcRenderer();
+      const newPath = `${getImagesDirectoryPath()}/${newName}`;
+      await ipcRenderer.invoke('copy-file', image.path, newPath);
+      await ipcRenderer.invoke('delete-file', image.path);
+
+      const nextTags = { ...imageArticleTags };
+      if (nextTags[image.name]) {
+        nextTags[newName] = nextTags[image.name];
+        delete nextTags[image.name];
+        persistImageArticleTags(nextTags);
+      }
+
+      await loadImageFiles(hexoPath);
+
+      toast({
+        title: t.success,
+        description: language === 'zh' ? `图片已重命名为 ${newName}` : `Image renamed to ${newName}`,
+        variant: 'success',
+      });
+    } catch (error) {
+      console.error('重命名图片失败:', error);
+      toast({
+        title: t.failed,
+        description: language === 'zh' ? `重命名图片失败: ${error instanceof Error ? error.message : String(error)}` : `Failed to rename image: ${error instanceof Error ? error.message : String(error)}`,
+        variant: 'error',
+      });
+    }
+  };
+
+  const deleteUploadedImage = async (image: UploadedImage) => {
+    if (!isElectron || !hexoPath) return;
+
+    const confirmed = window.confirm(
+      language === 'zh'
+        ? `确定要删除图片“${image.name}”吗？此操作不可撤销。`
+        : `Delete image "${image.name}"? This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      const ipcRenderer = await getIpcRenderer();
+      await ipcRenderer.invoke('delete-file', image.path);
+
+      if (imageArticleTags[image.name]) {
+        const nextTags = { ...imageArticleTags };
+        delete nextTags[image.name];
+        persistImageArticleTags(nextTags);
+      }
+
+      await loadImageFiles(hexoPath);
+
+      toast({
+        title: t.success,
+        description: language === 'zh' ? `已删除图片 ${image.name}` : `Image ${image.name} deleted`,
+        variant: 'success',
+      });
+    } catch (error) {
+      console.error('删除图片失败:', error);
+      toast({
+        title: t.failed,
+        description: language === 'zh' ? `删除图片失败: ${error instanceof Error ? error.message : String(error)}` : `Failed to delete image: ${error instanceof Error ? error.message : String(error)}`,
+        variant: 'error',
+      });
     }
   };
 
@@ -1242,7 +1750,7 @@ export default function Home() {
       console.error('创建文章失败:', error);
       const createErrorResult = {
         success: false,
-        error: '创建文章失败: ' + (error?.message || '未知错误'),
+        error: '创建文章失败: ' + (error instanceof Error ? error.message : '未知错误'),
         timestamp: new Date().toLocaleString(),
         command: 'create post'
       };
@@ -1337,7 +1845,7 @@ export default function Home() {
       console.error('读取文章失败:', error);
       const readErrorResult = {
         success: false,
-        error: '读取文章失败: ' + error.message,
+        error: '读取文章失败: ' + (error instanceof Error ? error.message : String(error)),
         timestamp: new Date().toLocaleString(),
         command: 'read post'
       };
@@ -1386,7 +1894,7 @@ export default function Home() {
       console.error('保存文章失败:', error);
       const saveErrorResult = {
         success: false,
-        error: '保存文章失败: ' + error.message,
+        error: '保存文章失败: ' + (error instanceof Error ? error.message : String(error)),
         timestamp: new Date().toLocaleString(),
         command: 'save post'
       };
@@ -1440,7 +1948,7 @@ export default function Home() {
       console.error('删除文章失败:', error);
       const deleteErrorResult = {
         success: false,
-        error: '删除文章失败: ' + error.message,
+        error: '删除文章失败: ' + (error instanceof Error ? error.message : String(error)),
         timestamp: new Date().toLocaleString(),
         command: 'delete post'
       };
@@ -1493,14 +2001,14 @@ export default function Home() {
       // 显示成功通知
       toast({
         title: t.success,
-        description: t.articlesDeleteSuccess.replace('{count}', postsToDelete.length),
+        description: t.articlesDeleteSuccess.replace('{count}', postsToDelete.length.toString()),
         variant: 'success',
       });
     } catch (error) {
       console.error('批量删除文章失败:', error);
       const batchDeleteErrorResult = {
         success: false,
-        error: '批量删除文章失败: ' + error.message,
+        error: '批量删除文章失败: ' + (error instanceof Error ? error.message : String(error)),
         timestamp: new Date().toLocaleString(),
         command: 'batch delete posts'
       };
@@ -1572,7 +2080,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
 
       const batchTagResult = {
         success: true,
-        stdout: t.tagsAddSuccess.replace('{successCount}', successCount).replace('{totalCount}', postsToUpdate.length),
+        stdout: t.tagsAddSuccess.replace('{successCount}', successCount.toString()).replace('{totalCount}', postsToUpdate.length.toString()),
         timestamp: new Date().toLocaleString(),
         command: 'batch add tags'
       };
@@ -1591,7 +2099,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
       console.error('批量添加标签失败:', error);
       const batchTagErrorResult = {
         success: false,
-        error: '批量添加标签失败: ' + error.message,
+        error: '批量添加标签失败: ' + (error instanceof Error ? error.message : String(error)),
         timestamp: new Date().toLocaleString(),
         command: 'batch add tags'
       };
@@ -1658,7 +2166,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
 
       setCommandResult({
         success: true,
-        stdout: t.categoriesAddSuccess.replace('{successCount}', successCount).replace('{totalCount}', postsToUpdate.length)
+        stdout: t.categoriesAddSuccess.replace('{successCount}', successCount.toString()).replace('{totalCount}', postsToUpdate.length.toString())
       });
 
       // 如果当前选中的文章在被更新的文章中，重新加载内容
@@ -1673,7 +2181,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
       console.error('批量添加分类失败:', error);
       const batchCategoryErrorResult = {
         success: false,
-        error: '批量添加分类失败: ' + error.message,
+        error: '批量添加分类失败: ' + (error instanceof Error ? error.message : String(error)),
         timestamp: new Date().toLocaleString(),
         command: 'batch add categories'
       };
@@ -1722,7 +2230,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
       console.error('删除文章失败:', error);
       const deleteErrorResult = {
         success: false,
-        error: '删除文章失败: ' + error.message,
+        error: '删除文章失败: ' + (error instanceof Error ? error.message : String(error)),
         timestamp: new Date().toLocaleString(),
         command: 'delete post'
       };
@@ -1805,7 +2313,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
       console.error('添加标签失败:', error);
       setCommandResult({
         success: false,
-        error: '添加标签失败: ' + error.message
+        error: '添加标签失败: ' + (error instanceof Error ? error.message : String(error))
       });
     } finally {
       setIsLoading(false);
@@ -1877,7 +2385,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
       console.error('添加分类失败:', error);
       setCommandResult({
         success: false,
-        error: '添加分类失败: ' + error.message
+        error: '添加分类失败: ' + (error instanceof Error ? error.message : String(error))
       });
     } finally {
       setIsLoading(false);
@@ -2132,7 +2640,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
       console.error('执行命令失败:', error);
       const commandErrorResult = {
         success: false,
-        error: '执行命令失败: ' + error.message,
+        error: '执行命令失败: ' + (error instanceof Error ? error.message : String(error)),
         timestamp: new Date().toLocaleString(),
         command: command
       };
@@ -2157,7 +2665,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
     if (!isElectron || !hexoPath || isServerRunning) return;
 
     setIsLoading(true);
-    
+
     // 显示开始启动服务器的通知
     toast({
       title: t.starting,
@@ -2165,18 +2673,48 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
       variant: 'default',
     });
 
-    try {
+    // 端口冲突检测
+    const isPortConflict = (r: any) => !!(r?.error && (
+      r.error.includes('端口 4000 已被占用') ||
+      r.error.includes('Port 4000 has been used') ||
+      r.error.includes('EADDRINUSE') ||
+      r.error.includes('地址已经被使用')
+    ));
+
+    // 内部启动逻辑（可重试）
+    const doStart = async () => {
       const ipcRenderer = await getIpcRenderer();
-      
-      // Tauri 后端会等待服务器就绪后才返回
-      // 这个调用可能需要几秒到十几秒（取决于 Hexo 启动速度）
       const serverCustomCmd = enableCustomCommands ? customServerCommand : undefined;
-      const result = await ipcRenderer.invoke('start-hexo-server', hexoPath, serverCustomCmd);
+      return await ipcRenderer.invoke('start-hexo-server', hexoPath, serverCustomCmd);
+    };
+
+    try {
+      let result = await doStart();
+
+      // 端口冲突时，自动清理后重试一次
+      if (!result.success && isPortConflict(result)) {
+        toast({
+          title: t.starting,
+          description: '检测到端口 4000 被占用，正在自动清理并重试...',
+          variant: 'default',
+        });
+        try {
+          const ipcRenderer = await getIpcRenderer();
+          // 先停止服务器（清理后端 hexoServerProcess + 端口残留）
+          await ipcRenderer.invoke('stop-hexo-server');
+          // 再修复端口（兜底）
+          await ipcRenderer.invoke('fix-port-conflict', 4000);
+        } catch (e) {
+          // 忽略清理错误，继续重试
+        }
+        // 重试启动
+        result = await doStart();
+      }
 
       if (result.success) {
         setServerProcess(result.process);
         setIsServerRunning(true);
-        
+
         const serverStartResult = {
           success: true,
           stdout: result.stdout || 'Hexo服务器已启动，访问 http://localhost:4000 预览网站',
@@ -2196,34 +2734,29 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
         // 只有在非服务器预览模式下才打开浏览器预览
         if (previewMode !== 'server') {
           setTimeout(() => {
-            ipcRenderer.invoke('open-url', 'http://localhost:4000');
+            getIpcRenderer()
+              .then(ipc => ipc.invoke('open-url', 'http://localhost:4000'))
+              .catch(() => { /* 忽略打开浏览器失败 */ });
           }, 1000);
         }
       } else {
         setCommandResult(result);
-        
-        // 检查是否是端口占用错误
-        const isPortConflict = result.error && (
-          result.error.includes('端口 4000 已被占用') ||
-          result.error.includes('Port 4000 has been used') ||
-          result.error.includes('EADDRINUSE')
-        );
-        
-        if (isPortConflict) {
-          // 端口占用错误 - 显示带修复按钮的提示
+
+        if (isPortConflict(result)) {
+          // 自动重试后仍端口冲突 - 显示带修复按钮的提示
           toast({
             title: t.failed,
             description: result.error || '端口 4000 已被占用',
             variant: 'error',
             action: (
-              <ToastAction 
-                altText="立即修复" 
+              <ToastAction
+                altText="立即修复"
                 onClick={async () => {
                   try {
                     setIsLoading(true);
                     const ipcRenderer = await getIpcRenderer();
                     const fixResult = await ipcRenderer.invoke('fix-port-conflict', 4000);
-                    
+
                     if (fixResult.success) {
                       toast({
                         title: '✅ 修复成功',
@@ -2265,9 +2798,9 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
       console.error('启动服务器失败:', error);
       setCommandResult({
         success: false,
-        error: '启动服务器失败: ' + error.message
+        error: '启动服务器失败: ' + (error instanceof Error ? error.message : String(error))
       });
-      
+
       // 显示错误通知
       toast({
         title: t.failed,
@@ -2279,10 +2812,137 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
     }
   };
 
+  // 推送核心逻辑（不含 toast / isLoading 管理），供 pushToRemote 和 oneClickPublish 复用
+  // 所有用户输入通过 escapeShellArg 转义，防止命令注入
+  const pushToRemoteCore = async (): Promise<{
+    success: boolean;
+    error?: string;
+    logs: Array<{ success: boolean; stdout?: string; stderr?: string; error?: string; timestamp: string; command: string }>;
+  }> => {
+    const logs: Array<{ success: boolean; stdout?: string; stderr?: string; error?: string; timestamp: string; command: string }> = [];
+
+    if (!pushRepoUrl || !pushUsername || !pushEmail) {
+      return { success: false, error: '请先在面板设置中配置推送信息', logs };
+    }
+
+    const ipcRenderer = await getIpcRenderer();
+
+    // 转义所有用户输入，防止命令注入
+    const escapedHexoPath = escapeShellArg(hexoPath);
+    const escapedUsername = escapeShellArg(pushUsername);
+    const escapedEmail = escapeShellArg(pushEmail);
+    const escapedRepoUrl = escapeShellArg(pushRepoUrl);
+    const escapedBranch = escapeShellArg(pushBranch);
+
+    // commit message 带时间戳，避免多次推送无法区分
+    const commitMessage = `${t.commitMessagePrefix} - ${new Date().toLocaleString()}`;
+    const escapedCommitMessage = escapeShellArg(commitMessage);
+
+    const gitSteps = [
+      { cmd: `git -C ${escapedHexoPath} config user.name ${escapedUsername}`, log: 'git config user.name', name: '配置用户名' },
+      { cmd: `git -C ${escapedHexoPath} config user.email ${escapedEmail}`, log: 'git config user.email', name: '配置邮箱' },
+      { cmd: `git -C ${escapedHexoPath} remote set-url origin ${escapedRepoUrl}`, log: 'git remote set-url origin', name: '设置远程仓库' },
+      { cmd: `git -C ${escapedHexoPath} add .`, log: 'git add .', name: '添加文件' },
+      { cmd: `git -C ${escapedHexoPath} commit -m ${escapedCommitMessage}`, log: `git commit -m "${commitMessage}"`, name: '提交更改' },
+      { cmd: `git -C ${escapedHexoPath} push -u origin ${escapedBranch}`, log: `git push -u origin ${pushBranch}`, name: '推送到远程' },
+    ];
+
+    for (const gitStep of gitSteps) {
+      const r = await ipcRenderer.invoke('execute-command', gitStep.cmd);
+      logs.push({ ...r, timestamp: new Date().toLocaleString(), command: gitStep.log });
+
+      if (!r.success) {
+        // 容忍 git commit 无改动：英文 "nothing to commit" 或中文 "无文件要提交" / "没有要提交的内容"
+        const isCommitNothingToCommit = gitStep.log.startsWith('git commit') && (
+          r.stderr?.includes('nothing to commit') ||
+          r.stdout?.includes('nothing to commit') ||
+          r.stderr?.includes('无文件要提交') ||
+          r.stdout?.includes('无文件要提交') ||
+          r.stderr?.includes('没有要提交的') ||
+          r.stdout?.includes('没有要提交的')
+        );
+
+        // git push 即使 success: false，也可能实际推送成功（PowerShell stderr 误判）
+        // 检测成功标志：输出包含 "分支名 -> 分支名" 或 "Everything up-to-date"
+        const combinedOutput = (r.stdout || '') + (r.stderr || '');
+        const isPushActuallySuccess = gitStep.log.startsWith('git push') && (
+          combinedOutput.includes('->') ||                    // 如 "main -> main"
+          combinedOutput.includes('Everything up-to-date') ||
+          combinedOutput.includes('已是最新') ||
+          combinedOutput.includes('set up to track')
+        );
+
+        if (isCommitNothingToCommit || isPushActuallySuccess) {
+          // 非致命情况，继续执行下一步
+          continue;
+        }
+
+        // git push 因远程有新提交被拒绝（non-fast-forward）
+        // 场景：一键发布中 hexo deploy 已推送 .deploy_git 到远程，源仓库 push 时冲突
+        // 修复：自动 git pull --rebase 后重试 push 一次
+        const isPushNonFastForward = gitStep.log.startsWith('git push') && (
+          combinedOutput.includes('fetch first') ||
+          combinedOutput.includes('rejected') ||
+          combinedOutput.includes('non-fast-forward') ||
+          combinedOutput.includes('强制更新')
+        );
+
+        if (isPushNonFastForward) {
+          // 步骤 1: git pull --rebase origin <branch>
+          const pullCmd = `git -C ${escapedHexoPath} pull --rebase origin ${escapedBranch}`;
+          const pullResult = await ipcRenderer.invoke('execute-command', pullCmd);
+          logs.push({ ...pullResult, timestamp: new Date().toLocaleString(), command: `git pull --rebase origin ${pushBranch}` });
+
+          if (pullResult.success) {
+            // 步骤 2: 重试 git push
+            const retryResult = await ipcRenderer.invoke('execute-command', gitStep.cmd);
+            logs.push({ ...retryResult, timestamp: new Date().toLocaleString(), command: `${gitStep.log} (重试)` });
+
+            if (retryResult.success) {
+              continue;  // 重试成功，继续（已是最后一步，循环结束）
+            }
+
+            // 重试仍失败，检测是否实际成功
+            const retryCombined = (retryResult.stdout || '') + (retryResult.stderr || '');
+            const retryActuallySuccess = retryCombined.includes('->') ||
+              retryCombined.includes('Everything up-to-date') ||
+              retryCombined.includes('已是最新');
+
+            if (retryActuallySuccess) {
+              continue;
+            }
+
+            return {
+              success: false,
+              error: `[${gitStep.name}] pull --rebase 后重试仍失败: ${retryResult.stderr || retryResult.error || 'unknown error'}`,
+              logs,
+            };
+          }
+
+          // pull --rebase 失败（可能有冲突），返回错误
+          return {
+            success: false,
+            error: `[${gitStep.name}] 远程有新提交，git pull --rebase 失败: ${pullResult.stderr || pullResult.error || '可能存在冲突，请手动解决'}`,
+            logs,
+          };
+        }
+
+        // 真正失败，返回包含步骤名的错误信息
+        return {
+          success: false,
+          error: `[${gitStep.name}] ${r.stderr || r.error || 'unknown error'}`,
+          logs,
+        };
+      }
+    }
+
+    return { success: true, logs };
+  };
+
   // 推送项目到远程仓库
   const pushToRemote = async () => {
     if (!isElectron || !hexoPath) return;
-    
+
     // 检查推送设置是否完整
     if (!pushRepoUrl || !pushUsername || !pushEmail) {
       toast({
@@ -2292,140 +2952,206 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
       });
       return;
     }
-    
+
     setIsLoading(true);
-    
+
     // 显示开始推送的通知
     toast({
       title: t.pushing,
       description: '正在将项目推送到远程仓库...',
       variant: 'default',
     });
-    
+
     try {
-      const ipcRenderer = await getIpcRenderer();
-      
-      // Tauri 环境使用 -C（大写）指定工作目录，Electron 保持原样，能跑就不改了
-      const gitCParam = isTauri() ? '-C' : '-C';
-      
-      // 配置Git用户信息
-      // Tauri: 使用 git -C 参数在指定目录下执行 git 命令（大写 ；
-      // Electron: 保持原有的 -c 参数
-      const configNameResult = await ipcRenderer.invoke('execute-command', `git ${gitCParam} ${hexoPath} config user.name "${pushUsername}"`);
-      const configNameLog = {
-        ...configNameResult,
-        timestamp: new Date().toLocaleString(),
-        command: `git config user.name "${pushUsername}"`
-      };
-      setCommandLogs(prev => [...prev, configNameLog]);
-      
-      // 检查配置用户名是否成功
-      if (!configNameResult.success) {
-        throw new Error(`配置Git用户名失败: ${configNameResult.stderr || configNameResult.error || '未知错误'}`);
+      const result = await pushToRemoteCore();
+
+      // 写入日志
+      for (const log of result.logs) {
+        setCommandLogs(prev => [...prev, log]);
       }
-      
-      const configEmailResult = await ipcRenderer.invoke('execute-command', `git ${gitCParam} ${hexoPath} config user.email "${pushEmail}"`);
-      const configEmailLog = {
-        ...configEmailResult,
-        timestamp: new Date().toLocaleString(),
-        command: `git config user.email "${pushEmail}"`
-      };
-      setCommandLogs(prev => [...prev, configEmailLog]);
-      
-      // 检查配置邮箱是否成功
-      if (!configEmailResult.success) {
-        throw new Error(`配置Git邮箱失败: ${configEmailResult.stderr || configEmailResult.error || '未知错误'}`);
+
+      if (result.success) {
+        const pushSuccessResult = {
+          success: true,
+          stdout: '项目已成功推送到远程仓库',
+          timestamp: new Date().toLocaleString(),
+          command: 'push to remote',
+        };
+        setCommandLogs(prev => [...prev, pushSuccessResult]);
+        setCommandResult(pushSuccessResult);
+
+        toast({
+          title: t.success,
+          description: t.pushSuccess,
+          variant: 'success',
+        });
+      } else {
+        const failResult = {
+          success: false,
+          error: result.error,
+          timestamp: new Date().toLocaleString(),
+          command: 'push to remote',
+        };
+        setCommandResult(failResult);
+
+        // 显示包含失败步骤名的错误信息（result.error 格式为 "[步骤名] 详情"）
+        toast({
+          title: t.failed,
+          description: result.error || t.pushFailed,
+          variant: 'error',
+          duration: 10000,
+        });
       }
-      
-      // 添加远程仓库
-      const remoteName = 'origin';
-      const addRemoteResult = await ipcRenderer.invoke('execute-command', `git ${gitCParam} ${hexoPath} remote set-url ${remoteName} ${pushRepoUrl}`);
-      const addRemoteLog = {
-        ...addRemoteResult,
-        timestamp: new Date().toLocaleString(),
-        command: `git remote set-url ${remoteName} ${pushRepoUrl}`
-      };
-      setCommandLogs(prev => [...prev, addRemoteLog]);
-      
-      // 检查添加远程仓库是否成功
-      // 注意：如果远程仓库已存在，命令会失败，但这不是致命错误，可以继续
-      if (!addRemoteResult.success && !addRemoteResult.stderr?.includes('already exists')) {
-        throw new Error(`添加远程仓库失败: ${addRemoteResult.stderr || addRemoteResult.error || '未知错误'}`);
-      }
-      
-      // 添加所有文件到暂存区
-      const addResult = await ipcRenderer.invoke('execute-command', `git ${gitCParam} ${hexoPath} add .`);
-      const addLog = {
-        ...addResult,
-        timestamp: new Date().toLocaleString(),
-        command: 'git add .'
-      };
-      setCommandLogs(prev => [...prev, addLog]);
-      
-      // 检查添加文件是否成功
-      if (!addResult.success) {
-        throw new Error(`添加文件到暂存区失败: ${addResult.stderr || addResult.error || '未知错误'}`);
-      }
-      
-      // 提交更改
-      const commitResult = await ipcRenderer.invoke('execute-command', `git ${gitCParam} ${hexoPath} commit -m Update`);
-      const commitLog = {
-        ...commitResult,
-        timestamp: new Date().toLocaleString(),
-        command: 'git commit -m Update'
-      };
-      setCommandLogs(prev => [...prev, commitLog]);
-      
-      // 检查提交是否成功
-      // 注意：如果没有更改需要提交，git会返回非零状态码，但这不是错误
-      if (!commitResult.success && !commitResult.stderr?.includes('nothing to commit')) {
-        throw new Error(`提交更改失败: ${commitResult.stderr || commitResult.error || '未知错误'}`);
-      }
-      
-      // 推送到远程仓库
-      const pushResult = await ipcRenderer.invoke('execute-command', `git ${gitCParam} ${hexoPath} push -u ${remoteName} ${pushBranch}`);
-      const pushLog = {
-        ...pushResult,
-        timestamp: new Date().toLocaleString(),
-        command: `git push -u ${remoteName} ${pushBranch}`
-      };
-      setCommandLogs(prev => [...prev, pushLog]);
-      
-      // 检查推送是否成功
-      if (!pushResult.success) {
-        throw new Error(`推送到远程仓库失败: ${pushResult.stderr || pushResult.error || '未知错误'}`);
-      }
-      
-      const pushSuccessResult = {
-        success: true,
-        stdout: '项目已成功推送到远程仓库',
-        timestamp: new Date().toLocaleString(),
-        command: 'push to remote'
-      };
-      setCommandLogs(prev => [...prev, pushSuccessResult]);
-      setCommandResult(pushSuccessResult);
-      
-      // 显示成功通知
-      toast({
-        title: t.success,
-        description: t.pushSuccess,
-        variant: 'success',
-      });
     } catch (error) {
       console.error('推送失败:', error);
       const pushErrorResult = {
         success: false,
-        error: '推送失败: ' + error.message,
+        error: '推送失败: ' + (error instanceof Error ? error.message : String(error)),
         timestamp: new Date().toLocaleString(),
-        command: 'push to remote'
+        command: 'push to remote',
       };
       setCommandLogs(prev => [...prev, pushErrorResult]);
       setCommandResult(pushErrorResult);
-      
+
       // 显示错误通知
       toast({
         title: t.failed,
         description: t.pushFailed,
+        variant: 'error',
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 一键发布：顺序执行 清理 → 生成 → 部署 → 推送（如启用且配置完整）
+  const oneClickPublish = async () => {
+    if (!isElectron || !hexoPath) return;
+
+    setIsLoading(true);
+
+    // 模板字符串一次性替换（避免 replace 链相互干扰）
+    const fmt = (template: string, vars: Record<string, string | number>) =>
+      template.replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? ''));
+
+    // Hexo 命令步骤
+    const hexoSteps = [
+      { command: enableCustomCommands ? customCleanCommand : 'clean', useCustom: enableCustomCommands, name: t.clean },
+      { command: enableCustomCommands ? customGenerateCommand : 'generate', useCustom: enableCustomCommands, name: t.generate },
+      { command: enableCustomCommands ? customDeployCommand : 'deploy', useCustom: enableCustomCommands, name: t.deploy },
+    ];
+
+    // 推送步骤是否可用
+    const willPush = enablePush && !!(pushRepoUrl && pushUsername && pushEmail);
+    const totalSteps = willPush ? hexoSteps.length + 1 : hexoSteps.length;
+
+    toast({
+      title: t.oneClickPublish,
+      description: t.oneClickPublishStart,
+      variant: 'default',
+    });
+
+    try {
+      const ipcRenderer = await getIpcRenderer();
+
+      // 执行 Hexo 命令步骤
+      for (let i = 0; i < hexoSteps.length; i++) {
+        const step = hexoSteps[i];
+        const stepNum = i + 1;
+
+        toast({
+          title: t.executing,
+          description: fmt(t.oneClickPublishStep, { step: stepNum, total: totalSteps, command: step.name }),
+          variant: 'default',
+        });
+
+        const result = step.useCustom
+          ? await ipcRenderer.invoke('execute-custom-command', step.command, hexoPath)
+          : await ipcRenderer.invoke('execute-hexo-command', step.command, hexoPath);
+
+        setCommandLogs(prev => [...prev, { ...result, timestamp: new Date().toLocaleString(), command: step.command }]);
+        setCommandResult(result);
+
+        if (!result.success) {
+          toast({
+            title: t.failed,
+            description: fmt(t.oneClickPublishFailed, { step: stepNum, command: step.name }),
+            variant: 'error',
+            duration: 10000,
+          });
+          return;
+        }
+      }
+
+      // 推送步骤
+      if (enablePush) {
+        if (!willPush) {
+          // 推送已启用但配置不完整，跳过并提示
+          toast({
+            title: t.oneClickPublish,
+            description: t.oneClickPublishPushSkipped,
+            variant: 'default',
+          });
+        } else {
+          const stepNum = hexoSteps.length + 1;
+          toast({
+            title: t.executing,
+            description: fmt(t.oneClickPublishStep, { step: stepNum, total: totalSteps, command: t.push }),
+            variant: 'default',
+          });
+
+          // 复用 pushToRemoteCore（含输入转义、commit 时间戳、容错等）
+          const pushResult = await pushToRemoteCore();
+          for (const log of pushResult.logs) {
+            setCommandLogs(prev => [...prev, log]);
+          }
+
+          if (!pushResult.success) {
+            const failResult = {
+              success: false,
+              error: pushResult.error,
+              timestamp: new Date().toLocaleString(),
+              command: 'push to remote',
+            };
+            setCommandResult(failResult);
+            toast({
+              title: t.failed,
+              description: fmt(t.oneClickPublishFailed, { step: stepNum, command: t.push }),
+              variant: 'error',
+              duration: 10000,
+            });
+            return;
+          }
+
+          const pushSuccessResult = {
+            success: true,
+            stdout: '项目已成功推送到远程仓库',
+            timestamp: new Date().toLocaleString(),
+            command: 'push to remote',
+          };
+          setCommandLogs(prev => [...prev, pushSuccessResult]);
+          setCommandResult(pushSuccessResult);
+        }
+      }
+
+      toast({
+        title: t.success,
+        description: t.oneClickPublishSuccess,
+        variant: 'success',
+      });
+    } catch (error) {
+      console.error('一键发布失败:', error);
+      const errResult = {
+        success: false,
+        error: '一键发布失败: ' + (error instanceof Error ? error.message : String(error)),
+        timestamp: new Date().toLocaleString(),
+        command: 'one-click publish',
+      };
+      setCommandLogs(prev => [...prev, errResult]);
+      setCommandResult(errResult);
+      toast({
+        title: t.failed,
+        description: errResult.error,
         variant: 'error',
       });
     } finally {
@@ -2438,7 +3164,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
     if (!isElectron || !isServerRunning) return;
 
     setIsLoading(true);
-    
+
     // 显示开始停止服务器的通知
     toast({
       title: t.stopping,
@@ -2448,7 +3174,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
 
     try {
       let result;
-      
+
       // 判断是否在 Tauri 环境，使用对应的 API
       if (isTauri()) {
         // Tauri 环境：使用公共的 commandOperations
@@ -2459,55 +3185,178 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
         result = await ipcRenderer.invoke('stop-hexo-server');
       }
 
+      // 无论后端返回 success 还是失败，前端都重置状态
+      // 这样即使后端 hexoServerProcess 已丢失（应用重启场景），按钮也能切回"开启服务器"
+      setIsServerRunning(false);
+      setServerProcess(null);
+
+      const serverStopResult = {
+        success: true,
+        stdout: result.stdout || 'Hexo服务器已停止',
+        timestamp: new Date().toLocaleString(),
+        command: 'stop server'
+      };
+      setCommandLogs(prev => [...prev, serverStopResult]);
+      setCommandResult(serverStopResult);
+
       if (result.success) {
-        setIsServerRunning(false);
-        setServerProcess(null);
-        const serverStopResult = {
-          success: true,
-          stdout: result.stdout || 'Hexo服务器已停止',
-          timestamp: new Date().toLocaleString(),
-          command: 'stop server'
-        };
-        setCommandLogs(prev => [...prev, serverStopResult]);
-        setCommandResult(serverStopResult);
-        
-        // 显示成功通知
         toast({
           title: t.success,
           description: t.serverStopped,
           variant: 'success',
         });
       } else {
-        setCommandResult(result);
-        
-        // 显示失败通知
+        // 后端返回失败（如"没有正在运行的服务器"），但前端状态已重置
+        // 按钮切回"开启服务器"，用户可重新启动
         toast({
-          title: t.failed,
-          description: result.error || 'Hexo服务器停止失败',
-          variant: 'error',
+          title: t.success,
+          description: result.error || '服务器状态已重置',
+          variant: 'default',
         });
       }
     } catch (error) {
       console.error('停止服务器失败:', error);
+      // 即使抛异常，也重置前端状态，避免按钮卡在"关闭服务器"
+      setIsServerRunning(false);
+      setServerProcess(null);
       const serverStopErrorResult = {
         success: false,
-        error: '停止服务器失败: ' + error.message,
+        error: '停止服务器失败: ' + (error instanceof Error ? error.message : String(error)),
         timestamp: new Date().toLocaleString(),
         command: 'stop server'
       };
       setCommandLogs(prev => [...prev, serverStopErrorResult]);
       setCommandResult(serverStopErrorResult);
-      
-      // 显示错误通知
+
       toast({
         title: t.failed,
-        description: '停止服务器失败',
+        description: '停止服务器失败，状态已重置',
         variant: 'error',
       });
     } finally {
       setIsLoading(false);
     }
   };
+
+  const imageArticleOptions = React.useMemo(() => {
+    return posts
+      .map((post) => post.name.replace(/\.(md|markdown)$/i, ''))
+      .sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  }, [posts]);
+
+  const imageArticleTagCounts = React.useMemo(() => {
+    return uploadedImages.reduce<Record<string, number>>((counts, image) => {
+      const articleTitle = imageArticleTags[image.name] || '';
+      if (articleTitle) {
+        counts[articleTitle] = (counts[articleTitle] || 0) + 1;
+      }
+      return counts;
+    }, {});
+  }, [uploadedImages, imageArticleTags]);
+
+  const usedImageArticleTags = React.useMemo(() => {
+    return Object.keys(imageArticleTagCounts)
+      .sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  }, [imageArticleTagCounts]);
+
+  const untaggedImageCount = React.useMemo(() => {
+    return uploadedImages.filter((image) => !imageArticleTags[image.name]).length;
+  }, [uploadedImages, imageArticleTags]);
+
+  const visibleUploadedImages = React.useMemo(() => {
+    if (imageArticleFilter === 'all') return uploadedImages;
+    if (imageArticleFilter === 'untagged') {
+      return uploadedImages.filter((image) => !imageArticleTags[image.name]);
+    }
+    return uploadedImages.filter((image) => imageArticleTags[image.name] === imageArticleFilter);
+  }, [uploadedImages, imageArticleTags, imageArticleFilter]);
+
+  const selectedImageArticleFilterLabel = React.useMemo(() => {
+    if (imageArticleFilter === 'all') return language === 'zh' ? '全部图片' : 'All images';
+    if (imageArticleFilter === 'untagged') return language === 'zh' ? '未关联文章' : 'Untagged images';
+    return imageArticleFilter;
+  }, [imageArticleFilter, language]);
+
+  const renderImageArticleFilterControls = () => (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/20 p-3">
+      <span className="text-xs font-medium text-muted-foreground">
+        {language === 'zh' ? '按文章标签查看：' : 'View by post tag:'}
+      </span>
+      <Button
+        variant={imageArticleFilter === 'all' ? 'default' : 'outline'}
+        size="sm"
+        className="h-7 px-2 text-xs"
+        onClick={() => setImageArticleFilter('all')}
+      >
+        {language === 'zh' ? `全部 ${uploadedImages.length}` : `All ${uploadedImages.length}`}
+      </Button>
+      <Button
+        variant={imageArticleFilter === 'untagged' ? 'default' : 'outline'}
+        size="sm"
+        className="h-7 px-2 text-xs"
+        onClick={() => setImageArticleFilter('untagged')}
+      >
+        {language === 'zh' ? `未关联 ${untaggedImageCount}` : `Untagged ${untaggedImageCount}`}
+      </Button>
+      {usedImageArticleTags.map((articleTitle) => (
+        <Button
+          key={articleTitle}
+          variant={imageArticleFilter === articleTitle ? 'default' : 'outline'}
+          size="sm"
+          className="h-7 max-w-48 px-2 text-xs"
+          onClick={() => setImageArticleFilter(articleTitle)}
+          title={articleTitle}
+        >
+          <span className="truncate">{articleTitle}</span>
+          <span className="ml-1 opacity-75">{imageArticleTagCounts[articleTitle]}</span>
+        </Button>
+      ))}
+      {usedImageArticleTags.length === 0 && (
+        <span className="text-xs text-muted-foreground">
+          {language === 'zh' ? '还没有图片关联到文章' : 'No images are linked to posts yet'}
+        </span>
+      )}
+    </div>
+  );
+
+  const renderImageArticleTagSelect = (image: UploadedImage, compact = false) => {
+    const currentArticleTitle = getImageArticleTag(image.name);
+
+    return (
+      <select
+        value={currentArticleTitle}
+        onChange={(event) => updateImageArticleTag(image.name, event.target.value)}
+        className={`${compact ? 'h-8 max-w-44 text-[11px]' : 'h-9 max-w-64 text-xs'} rounded-md border border-slate-300 bg-white px-2 font-medium text-slate-800 shadow-sm outline-none transition-colors hover:border-blue-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:hover:border-blue-500 dark:focus:border-blue-400`}
+        title={language === 'zh' ? '选择使用该图片的文章' : 'Select the post using this image'}
+      >
+        <option className="bg-white text-slate-800 dark:bg-slate-900 dark:text-slate-100" value="">{language === 'zh' ? '未关联文章' : 'No post'}</option>
+        {currentArticleTitle && !imageArticleOptions.includes(currentArticleTitle) && (
+          <option className="bg-white text-slate-800 dark:bg-slate-900 dark:text-slate-100" value={currentArticleTitle}>
+            {language === 'zh' ? `${currentArticleTitle}（文章可能已删除）` : `${currentArticleTitle} (post may be deleted)`}
+          </option>
+        )}
+        {imageArticleOptions.map((articleTitle) => (
+          <option className="bg-white text-slate-800 dark:bg-slate-900 dark:text-slate-100" key={articleTitle} value={articleTitle}>
+            {articleTitle}
+          </option>
+        ))}
+      </select>
+    );
+  };
+
+  const renderNoVisibleUploadedImages = () => (
+    <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-6 text-center text-muted-foreground">
+      <Image className="mb-2 h-8 w-8" />
+      <p className="text-sm">
+        {language === 'zh'
+          ? `“${selectedImageArticleFilterLabel}”下暂无图片`
+          : `No images under “${selectedImageArticleFilterLabel}”`}
+      </p>
+      <p className="mt-1 text-xs">
+        {language === 'zh' ? '可以为图片选择文章标签，或切换到其他分类查看。' : 'Assign post tags to images or switch to another category.'}
+      </p>
+    </div>
+  );
 
   // 渲染命令结果
   const renderCommandResult = () => {
@@ -2568,15 +3417,15 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
   };
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    <div className="app-shell bg-background flex flex-col">
       {/* 自定义标题栏 - 固定在顶部 */}
       <CustomTitlebar />
       
       {/* 顶部导航栏 - 添加顶部边距以避免被固定标题栏遮挡 */}
-      <header className="border-b bg-card mt-10">
-        <div className="flex items-center justify-between p-4">
-          <div className="flex items-center space-x-4">
-            <h1 className="text-xl font-bold">Hexo Hub</h1>
+      <header className="app-header-bar border-b bg-card mt-10 shrink-0">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 p-3 lg:p-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <h1 className="truncate text-xl font-bold">Hexo Hub</h1>
             {isValidHexoProject && (
               <Badge variant="default" className="bg-green-500">
                 {language === 'zh' ? '已连接' : 'Connected'}
@@ -2584,7 +3433,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
             )}
           </div>
 
-          <div className="flex items-center space-x-2">
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
             {enableAI && (
               <Button
                 variant="outline"
@@ -2606,6 +3455,18 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
               {t.articles}
             </Button>
             <Button
+              variant={mainView === 'images' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => {
+                setSelectedPost(null);
+                setMainView('images');
+              }}
+              disabled={!isValidHexoProject}
+            >
+              <Image className="w-4 h-4 mr-2" />
+              {language === 'zh' ? '图片' : 'Images'}
+            </Button>
+            <Button
               variant={mainView === 'config' ? 'default' : 'outline'}
               size="sm"
               onClick={() => setMainView('config')}
@@ -2618,7 +3479,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
               variant="outline"
               size="sm"
               onClick={() => executeHexoCommand(enableCustomCommands ? customCleanCommand : 'clean', enableCustomCommands)}
-              disabled={!isValidHexoProject || isLoading}
+              disabled={!isValidHexoProject || isLoading || !isElectron}
             >
               <Terminal className="w-4 h-4 mr-2" />
               {t.clean}
@@ -2627,7 +3488,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
               variant="outline"
               size="sm"
               onClick={() => executeHexoCommand(enableCustomCommands ? customGenerateCommand : 'generate', enableCustomCommands)}
-              disabled={!isValidHexoProject || isLoading}
+              disabled={!isValidHexoProject || isLoading || !isElectron}
             >
               <Play className="w-4 h-4 mr-2" />
               {t.generate}
@@ -2636,7 +3497,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
               variant="outline"
               size="sm"
               onClick={() => executeHexoCommand(enableCustomCommands ? customDeployCommand : 'deploy', enableCustomCommands)}
-              disabled={!isValidHexoProject || isLoading}
+              disabled={!isValidHexoProject || isLoading || !isElectron}
             >
               <Globe className="w-4 h-4 mr-2" />
               {t.deploy}
@@ -2646,17 +3507,27 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
                 variant="outline"
                 size="sm"
                 onClick={pushToRemote}
-                disabled={!isValidHexoProject || isLoading}
+                disabled={!isValidHexoProject || isLoading || !isElectron}
               >
                 <Upload className="w-4 h-4 mr-2" />
                 {t.push}
               </Button>
             )}
             <Button
+              variant="default"
+              size="sm"
+              onClick={oneClickPublish}
+              disabled={!isValidHexoProject || isLoading || !isElectron}
+              title={t.oneClickPublish}
+            >
+              <Rocket className="w-4 h-4 mr-2" />
+              {t.oneClickPublish}
+            </Button>
+            <Button
               variant={isServerRunning ? "destructive" : "default"}
               size="sm"
               onClick={isServerRunning ? stopHexoServer : startHexoServer}
-              disabled={!isValidHexoProject || isLoading}
+              disabled={!isValidHexoProject || isLoading || !isElectron}
             >
               {isServerRunning ? (
                 <>
@@ -2672,7 +3543,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
             </Button>
 
             {/* 语言切换按钮 */}
-            <div className="border-l pl-2 ml-2 flex items-center space-x-2">
+            <div className="border-l pl-2 ml-1 flex items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
@@ -2701,10 +3572,10 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
         </div>
       </header>
 
-      <div className="flex h-[calc(100vh-73px)]">
+      <div className="app-main-layout flex flex-1">
         {/* 侧边栏 */}
         {/* 左侧栏内容过多时，设置 overflow-y-auto，会在侧边栏内部滚动，而不会影响整个页面的大小 */}
-        <aside className="w-80 border-r bg-background flex flex-col overflow-y-auto">
+        <aside className="app-sidebar border-r bg-background flex flex-col overflow-y-auto">
           {/* 项目选择 */}
           <Card className="m-4">
             <CardHeader className="pb-3">
@@ -2804,6 +3675,19 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
                 variant="outline"
                 size="sm"
                 className="w-full justify-start"
+                onClick={() => {
+                  setSelectedPost(null);
+                  setMainView('images');
+                }}
+                disabled={!isValidHexoProject || isLoading}
+              >
+                <Image className="w-4 h-4 mr-2" />
+                {language === 'zh' ? '图片管理' : 'Image Manager'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start"
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -2830,6 +3714,23 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
               </Button>
             </CardContent>
           </Card>
+
+          <ExternalAnalyticsCards
+            language={language}
+            giscusRepo={giscusRepo}
+            giscusCategory={giscusCategory}
+            giscusToken={giscusToken}
+            ga4PropertyId={ga4PropertyId}
+            ga4ServiceAccountJson={ga4ServiceAccountJson}
+            onOpenGiscusAnalytics={() => {
+              setSelectedPost(null);
+              setMainView('giscus-analytics');
+            }}
+            onOpenGa4Analytics={() => {
+              setSelectedPost(null);
+              setMainView('ga4-analytics');
+            }}
+          />
 
           {/* 面板设置 */}
           <Card className="m-4">
@@ -2873,9 +3774,9 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
         </aside>
 
         {/* 主内容区域 */}
-        <main className="flex-1 flex flex-col">
+        <main className="app-main-content flex-1 flex flex-col overflow-hidden">
           {mainView === 'statistics' ? (
-            <div className="flex-1 p-6 overflow-auto">
+            <div className="app-scroll-area flex-1">
               <TagCloud tags={allTagsForCloud} language={language} />
               <PublishStats 
                 posts={posts} 
@@ -2909,8 +3810,21 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
                 </Card>
               )}
             </div>
+          ) : mainView === 'giscus-analytics' ? (
+            <GiscusCommentsAnalyticsPage
+              language={language}
+              repo={giscusRepo}
+              category={giscusCategory}
+              token={giscusToken}
+            />
+          ) : mainView === 'ga4-analytics' ? (
+            <Ga4ViewsAnalyticsPage
+              language={language}
+              propertyId={ga4PropertyId}
+              serviceAccountJson={ga4ServiceAccountJson}
+            />
           ) : mainView === 'settings' ? (
-            <div className="flex-1 p-6 overflow-auto">
+            <div className="app-scroll-area flex-1">
               <PanelSettings
                 updateAvailable={updateAvailable}
                 onUpdateCheck={() => checkForUpdates(false)}
@@ -2968,6 +3882,20 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
                 onOpenaiModelChange={setOpenaiModel}
                 openaiApiEndpoint={openaiApiEndpoint}
                 onOpenaiApiEndpointChange={setOpenaiApiEndpoint}
+                openaiApiPath={openaiApiPath}
+                onOpenaiApiPathChange={setOpenaiApiPath}
+                imageBaseUrl={imageBaseUrl}
+                onImageBaseUrlChange={setImageBaseUrl}
+                giscusRepo={giscusRepo}
+                onGiscusRepoChange={setGiscusRepo}
+                giscusCategory={giscusCategory}
+                onGiscusCategoryChange={setGiscusCategory}
+                giscusToken={giscusToken}
+                onGiscusTokenChange={setGiscusToken}
+                ga4PropertyId={ga4PropertyId}
+                onGa4PropertyIdChange={setGa4PropertyId}
+                ga4ServiceAccountJson={ga4ServiceAccountJson}
+                onGa4ServiceAccountJsonChange={setGa4ServiceAccountJson}
                 previewMode={previewMode}
                 onPreviewModeChange={setPreviewMode}
                 iframeUrlMode={iframeUrlMode}
@@ -2975,7 +3903,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
               />
             </div>
           ) : mainView === 'logs' ? (
-            <div className="flex-1 p-6 overflow-auto">
+            <div className="app-scroll-area flex-1">
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center">
@@ -3099,21 +4027,214 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
                 </CardContent>
               </Card>
             </div>
+          ) : mainView === 'images' ? (
+            <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
+              <div className="border-b p-4 flex shrink-0 flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-lg font-semibold">{language === 'zh' ? '图片管理' : 'Image Manager'}</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {language === 'zh' ? '统一管理 Hexo source/images 图片，不与文章列表混排。' : 'Manage Hexo source/images separately from the article list.'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline">
+                    {language === 'zh' ? `${visibleUploadedImages.length}/${uploadedImages.length} 张图片` : `${visibleUploadedImages.length}/${uploadedImages.length} images`}
+                  </Badge>
+                  <Button
+                    variant={imageViewMode === 'list' ? 'default' : 'outline'}
+                    size="sm"
+                    className="h-8 px-2"
+                    onClick={() => setImageViewMode('list')}
+                    title={language === 'zh' ? '列表视图' : 'List view'}
+                  >
+                    <List className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    variant={imageViewMode === 'grid' ? 'default' : 'outline'}
+                    size="sm"
+                    className="h-8 px-2"
+                    onClick={() => setImageViewMode('grid')}
+                    title={language === 'zh' ? '图标视图' : 'Grid view'}
+                  >
+                    <Grid3X3 className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+              <div className="app-scroll-area flex-1">
+                {isValidHexoProject ? (
+                  <Card
+                    ref={imageManagerDropAreaRef}
+                    className={`border bg-background transition-colors ${isImageDragOver ? 'border-blue-400 bg-blue-50/70 shadow-sm dark:bg-blue-950/30' : 'border-border'}`}
+                    onDragOver={handleImageDragOver}
+                    onDragLeave={handleImageDragLeave}
+                    onDrop={handleImageDrop}
+                  >
+                    <CardContent className="space-y-4 p-4">
+                      <div className={`rounded-lg border border-dashed p-4 text-center transition-colors ${isImageDragOver ? 'border-blue-500 bg-blue-100/70 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300' : 'border-muted-foreground/30 bg-muted/20 text-muted-foreground'}`}>
+                        <Upload className="mx-auto mb-2 h-7 w-7" />
+                        <p className="text-sm font-medium">
+                          {isImageDragOver
+                            ? (language === 'zh' ? '松开鼠标上传图片' : 'Release to upload images')
+                            : (language === 'zh' ? '拖动图片到这里上传' : 'Drag images here to upload')}
+                        </p>
+                        <p className="mt-1 text-xs">
+                          {language === 'zh'
+                            ? '所有图片会保存到 Hexo 的 source/images 目录'
+                            : 'All images are saved to Hexo source/images'}
+                        </p>
+                        <div className="mt-3 flex items-center justify-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={uploadImageToSourceImages}
+                            disabled={isUploadingImage || isLoading}
+                          >
+                            <Upload className="w-4 h-4 mr-2" />
+                            {isUploadingImage ? (language === 'zh' ? '上传中...' : 'Uploading...') : (language === 'zh' ? '选择图片' : 'Choose Image')}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => loadImageFiles(hexoPath)}
+                            disabled={isUploadingImage || isLoading}
+                          >
+                            <RefreshCw className="w-4 h-4 mr-2" />
+                            {language === 'zh' ? '刷新' : 'Refresh'}
+                          </Button>
+                        </div>
+                      </div>
+
+                      {renderImageArticleFilterControls()}
+
+                      {uploadedImages.length > 0 ? (
+                        visibleUploadedImages.length > 0 ? (
+                          imageViewMode === 'list' ? (
+                            <div className="overflow-auto rounded-lg border">
+                              {visibleUploadedImages.map((image) => (
+                                <div key={image.path} className="flex items-center justify-between gap-3 border-b px-3 py-2 last:border-b-0 hover:bg-muted/50">
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <Image className="h-4 w-4 flex-shrink-0 text-blue-600" />
+                                    <div className="min-w-0">
+                                      <div className="truncate text-sm font-medium">{image.name}</div>
+                                      <div className="text-xs text-muted-foreground">{formatUploadedImageSize(image.size)}</div>
+                                      <div className="mt-1 flex flex-wrap items-center gap-1">
+                                        {getImageArticleTag(image.name) ? (
+                                          <Badge variant="secondary" className="max-w-48 truncate text-[10px]">
+                                            {language === 'zh' ? '文章：' : 'Post: '}{getImageArticleTag(image.name)}
+                                          </Badge>
+                                        ) : (
+                                          <span className="text-[10px] text-muted-foreground">
+                                            {language === 'zh' ? '未关联文章' : 'No linked post'}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="flex flex-shrink-0 items-center gap-1">
+                                    {renderImageArticleTagSelect(image)}
+                                    <Badge variant="outline" className="hidden text-[10px] md:inline-flex">
+                                      /images/{image.name}
+                                    </Badge>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-8 w-8 p-0"
+                                      onClick={() => renameUploadedImage(image)}
+                                      title={language === 'zh' ? '重命名图片' : 'Rename image'}
+                                    >
+                                      <Edit className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-8 w-8 p-0 text-red-600 hover:text-red-700"
+                                      onClick={() => deleteUploadedImage(image)}
+                                      title={language === 'zh' ? '删除图片' : 'Delete image'}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
+                              {visibleUploadedImages.map((image) => (
+                                <div key={image.path} className="rounded-lg border p-3 text-center transition-colors hover:bg-muted/50">
+                                  <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-300">
+                                    <Image className="h-6 w-6" />
+                                  </div>
+                                  <div className="truncate text-xs font-medium" title={image.name}>{image.name}</div>
+                                  <div className="mt-1 text-[10px] text-muted-foreground">{formatUploadedImageSize(image.size)}</div>
+                                  <div className="mt-2 flex justify-center">
+                                    {renderImageArticleTagSelect(image, true)}
+                                  </div>
+                                  <div className="mt-3 flex items-center justify-center gap-1">
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-7 w-7 p-0"
+                                      onClick={() => renameUploadedImage(image)}
+                                      title={language === 'zh' ? '重命名图片' : 'Rename image'}
+                                    >
+                                      <Edit className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-7 w-7 p-0 text-red-600 hover:text-red-700"
+                                      onClick={() => deleteUploadedImage(image)}
+                                      title={language === 'zh' ? '删除图片' : 'Delete image'}
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )
+                        ) : (
+                          renderNoVisibleUploadedImages()
+                        )
+                      ) : (
+                        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-6 text-center text-muted-foreground">
+                          <Image className="mb-2 h-8 w-8" />
+                          <p className="text-sm">{language === 'zh' ? '还没有上传图片' : 'No uploaded images yet'}</p>
+                          <p className="mt-1 text-xs">{language === 'zh' ? '拖动图片到上方区域，或点击选择图片。' : 'Drag images above or choose an image.'}</p>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center space-y-4">
+                      <Image className="w-16 h-16 mx-auto text-gray-400" />
+                      <h3 className="text-lg font-medium text-gray-900">
+                        {t.selectProjectFirst}
+                      </h3>
+                      <p className="text-gray-500">
+                        {t.clickSelectButton}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           ) : mainView === 'posts' ? (
             selectedPost ? (
-              <div className="flex-1 flex flex-col editor-container">
+              <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden editor-container">
                 {/* 固定在顶部的编辑器控制栏 */}
-                <div className="border-b bg-card p-3 flex flex-col space-y-2 sticky top-0 z-10">
+                <div className="border-b bg-card p-3 flex shrink-0 flex-col gap-2 sticky top-0 z-10">
                   {/* 文章标题栏 */}
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-4">
-                      <h2 className="text-lg font-semibold">{selectedPost.name}</h2>
+                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <h2 className="truncate text-lg font-semibold" title={selectedPost.name}>{selectedPost.name}</h2>
                       <Badge variant="outline">
                         {selectedPost.size} bytes
                       </Badge>
                     </div>
 
-                    <div className="flex items-center space-x-2">
+                    <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
                       {isUsingExternalEditor ? (
                         // 外部编辑器模式：只显示重新加载按钮
                         <Button
@@ -3311,8 +4432,8 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
                   </div>
 
                   {/* 编辑-预览转换栏和Markdown快捷语法栏 */}
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-4">
+                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                    <div className="flex min-w-0 flex-wrap items-center gap-3">
                       <Tabs value={activeTab} onValueChange={setActiveTab}>
                         <TabsList className="grid w-full grid-cols-2">
                           <TabsTrigger value="editor" className="flex items-center">
@@ -3326,7 +4447,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
                         </TabsList>
                       </Tabs>
 
-                      <div className="flex items-center space-x-2 text-sm text-foreground">
+                      <div className="flex items-center gap-2 text-sm text-foreground">
                         <span className="text-xs bg-background border px-2 py-1 rounded">
                           {postContent.split('').length} 行
                         </span>
@@ -3334,7 +4455,7 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
                     </div>
 
                     {/* Markdown快捷语法栏 */}
-                    <div className="flex items-center space-x-1">
+                    <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
                       <Button variant="ghost" size="sm" onClick={() => {
                         const textarea = document.querySelector('textarea');
                         if (textarea) {
@@ -3511,18 +4632,11 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
                       }} title="链接" className="h-8 w-8 p-0">
                         <Link className="w-4 h-4" />
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={() => {
-                        const textarea = document.querySelector('textarea');
-                        if (textarea) {
-                          const start = textarea.selectionStart;
-                          const insertText = '![alt text](image-url)';
-                          const newValue = postContent.substring(0, start) + insertText + postContent.substring(textarea.selectionEnd);
-                          setPostContent(newValue);
-                          setTimeout(() => {
-                            textarea.selectionStart = textarea.selectionEnd = start + insertText.length;
-                            textarea.focus();
-                          }, 0);
+                      <Button variant="ghost" size="sm" onClick={async () => {
+                        if (hexoPath) {
+                          await loadImageFiles(hexoPath);
                         }
+                        setShowImagePickerDialog(true);
                       }} title="图片" className="h-8 w-8 p-0">
                         <Image className="w-4 h-4" />
                       </Button>
@@ -3621,7 +4735,7 @@ ${selectedText}
                 </div>
 
                 {/* 编辑器区域 */}
-                <div className="flex-1">
+                <div className="editor-workspace flex-1 overflow-hidden">
                   {isUsingExternalEditor ? (
                     // 使用外部编辑器时的提示信息
                     <div className="flex flex-col items-center justify-center h-full p-6 text-center">
@@ -3670,54 +4784,16 @@ ${selectedText}
                       </div>
                     </div>
                   ) : editorMode === 'mode1' ? (
-                    // 模式1：分离编辑和预览，需要手动切换
-                    <>
-                      {activeTab === 'editor' && (
-                        <div className="h-full overflow-hidden" style={{ height: 'calc(100vh - 200px)' }}>
-                          <MarkdownEditorWrapper
-                            value={postContent}
-                            onChange={setPostContent}
-                            onSave={savePost}
-                            isLoading={isLoading}
-                            language={language}
-                            hexoPath={hexoPath}
-                            selectedPost={selectedPost}
-                            posts={posts}
-                            enableAI={enableEditorAI}
-                            aiProvider={aiProvider}
-                            apiKey={apiKey}
-                            openaiModel={openaiModel}
-                            openaiApiEndpoint={openaiApiEndpoint}
-                          />
-                        </div>
-                      )}
-
-                      {activeTab === 'preview' && (
-                        <div className="h-full overflow-auto" style={{ height: 'calc(100vh - 200px)' }}>
-                          <MarkdownPreview
-                            content={postContent}
-                            className="p-6"
-                            previewMode={previewMode}
-                            hexoPath={hexoPath}
-                            selectedPost={selectedPost}
-                            isServerRunning={isServerRunning}
-                            onStartServer={startHexoServer}
-                            iframeUrlMode={iframeUrlMode}
-                          />
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    // 模式2：同时显示编辑和预览，左右分栏
-                    <div className="h-full flex flex-col md:flex-row overflow-hidden relative" style={{ height: 'calc(100vh - 200px)' }}>
-                      <div 
-                        className="w-full md:h-full border-r overflow-hidden"
-                        style={{ 
-                          width: `calc(${splitRatio * 100}%)`,
-                          height: 'calc(100vh - 200px)' 
+                    // 模式1：编辑器和预览左右并排显示（实时预览）
+                    <div className="editor-split-container h-full flex flex-row overflow-hidden relative rounded-xl border bg-background shadow-sm">
+                      {/* 左侧：编辑器 */}
+                      <div
+                        className="editor-split-pane w-full overflow-hidden bg-background"
+                        style={{
+                          width: `calc(${splitRatio * 100}%)`
                         }}
                       >
-                        <div className="h-full overflow-hidden" style={{ height: 'calc(100vh - 200px)' }}>
+                        <div className="h-full overflow-hidden">
                           <MarkdownEditorWrapper
                             value={postContent}
                             onChange={setPostContent}
@@ -3732,13 +4808,151 @@ ${selectedText}
                             apiKey={apiKey}
                             openaiModel={openaiModel}
                             openaiApiEndpoint={openaiApiEndpoint}
+                            openaiApiPath={openaiApiPath}
+                          />
+                        </div>
+                      </div>
+
+                      {/* 可拖动的分隔条 */}
+                      <div
+                        className="editor-split-resizer absolute top-0 bottom-0 w-2 -translate-x-1 cursor-col-resize bg-gradient-to-b from-blue-400 via-indigo-500 to-purple-500 opacity-80 shadow-[0_0_0_1px_rgba(255,255,255,0.35),0_0_18px_rgba(99,102,241,0.45)] transition-all hover:opacity-100 hover:w-3 z-20"
+                        style={{ left: `calc(${splitRatio * 100}%)` }}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setIsDragging(true);
+
+                          const startX = e.clientX;
+                          const containerWidth = e.currentTarget.parentElement?.offsetWidth || 0;
+                          const startRatio = splitRatio;
+                          let dragging = true;
+
+                          const handleMouseMove = (e: MouseEvent) => {
+                            if (!dragging) return;
+                            const deltaX = e.clientX - startX;
+                            const newRatio = Math.max(0.2, Math.min(0.8, startRatio + (deltaX / containerWidth)));
+                            setSplitRatio(newRatio);
+                          };
+
+                          const handleMouseUp = () => {
+                            dragging = false;
+                            setIsDragging(false);
+                            document.removeEventListener('mousemove', handleMouseMove);
+                            document.removeEventListener('mouseup', handleMouseUp);
+                          };
+
+                          document.addEventListener('mousemove', handleMouseMove);
+                          document.addEventListener('mouseup', handleMouseUp);
+                        }}
+                      />
+
+                      {/* 右侧：预览 */}
+                      <div
+                        className="editor-split-pane w-full overflow-hidden bg-[linear-gradient(135deg,rgba(59,130,246,0.16),rgba(168,85,247,0.12)_45%,rgba(14,165,233,0.10))] dark:bg-[linear-gradient(135deg,rgba(30,64,175,0.32),rgba(88,28,135,0.26)_45%,rgba(12,74,110,0.24))]"
+                        style={{
+                          width: `calc(${(1 - splitRatio) * 100}%)`
+                        }}
+                      >
+                        {/* 预览工具栏 */}
+                        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-blue-200/70 bg-white/90 px-3 py-2 shadow-sm backdrop-blur dark:border-blue-900/60 dark:bg-slate-950/85 sticky top-0 z-10">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-white shadow-sm">
+                              <Monitor className="w-3.5 h-3.5" />
+                            </div>
+                            <div className="flex min-w-0 flex-col leading-none">
+                              <span className="truncate text-sm font-semibold text-blue-700 dark:text-blue-300">
+                                {previewMode === 'server' ? (language === 'zh' ? '服务器预览' : 'Server Preview') : (language === 'zh' ? '实时预览' : 'Live Preview')}
+                              </span>
+                              <span className="mt-1 hidden truncate text-[11px] text-muted-foreground xl:block">
+                                {language === 'zh' ? '右侧为渲染后的文章效果，不再是源码编辑区' : 'Rendered article view, separate from source editor'}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center space-x-1">
+                            {previewMode === 'server' && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0 border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-300"
+                                onClick={() => setForcePreviewRefresh(true)}
+                                title={language === 'zh' ? '刷新预览' : 'Refresh preview'}
+                              >
+                                <RefreshCw className="w-3.5 h-3.5" />
+                              </Button>
+                            )}
+                            {previewMode !== 'server' && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0 border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-300"
+                                onClick={() => {
+                                  // 在新窗口打开纯文本预览
+                                  const previewWindow = window.open('', '_blank');
+                                  if (previewWindow) {
+                                    previewWindow.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Preview</title></head><body><pre style="white-space:pre-wrap;font-family:monospace;padding:20px;">${postContent.replace(/</g, '&lt;')}</pre></body></html>`);
+                                    previewWindow.document.close();
+                                  }
+                                }}
+                                title={language === 'zh' ? '新窗口打开' : 'Open in new window'}
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                        <div className="pointer-events-none absolute right-5 top-16 z-0 hidden select-none items-center gap-1 rounded-full border border-blue-200/70 bg-white/70 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-blue-500 shadow-sm backdrop-blur dark:border-blue-900/70 dark:bg-slate-950/60 dark:text-blue-300 md:flex">
+                          <Sparkles className="h-3.5 w-3.5" />
+                          {language === 'zh' ? '预览区域' : 'Preview Area'}
+                        </div>
+                        <MarkdownPreview
+                          content={postContent}
+                          className="h-[calc(100%-49px)] p-5"
+                          previewMode={previewMode}
+                          hexoPath={hexoPath}
+                          selectedPost={selectedPost}
+                          isServerRunning={isServerRunning}
+                          onStartServer={startHexoServer}
+                          forceRefresh={forcePreviewRefresh}
+                          onForceRefreshComplete={() => setForcePreviewRefresh(false)}
+                          iframeUrlMode={iframeUrlMode}
+                          giscusRepo={giscusRepo}
+                          giscusCategory={giscusCategory}
+                          giscusToken={giscusToken}
+                          language={language}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    // 模式2：同时显示编辑和预览，左右分栏
+                    <div className="editor-split-container h-full flex flex-row overflow-hidden relative">
+                      <div 
+                        className="editor-split-pane w-full border-r overflow-hidden"
+                        style={{ 
+                          width: `calc(${splitRatio * 100}%)`
+                        }}
+                      >
+                        <div className="h-full overflow-hidden">
+                          <MarkdownEditorWrapper
+                            value={postContent}
+                            onChange={setPostContent}
+                            onSave={savePost}
+                            isLoading={isLoading}
+                            language={language}
+                            hexoPath={hexoPath}
+                            selectedPost={selectedPost}
+                            posts={posts}
+                            enableAI={enableEditorAI}
+                            aiProvider={aiProvider}
+                            apiKey={apiKey}
+                            openaiModel={openaiModel}
+                            openaiApiEndpoint={openaiApiEndpoint}
+                            openaiApiPath={openaiApiPath}
                           />
                         </div>
                       </div>
                       
                       {/* 可拖动的分隔条 */}
                       <div
-                        className="absolute top-0 bottom-0 w-1 bg-gray-300 dark:bg-gray-600 cursor-col-resize hover:bg-blue-400 dark:hover:bg-blue-500 transition-colors z-10"
+                        className="editor-split-resizer absolute top-0 bottom-0 w-1 bg-gray-300 dark:bg-gray-600 cursor-col-resize hover:bg-blue-400 dark:hover:bg-blue-500 transition-colors z-10"
                         style={{ left: `calc(${splitRatio * 100}% - 2px)` }}
                         onMouseDown={(e) => {
                           e.preventDefault();
@@ -3769,16 +4983,15 @@ ${selectedText}
                         }}
                       />
                       
-                      <div 
-                        className="w-full md:h-full overflow-auto"
+                      <div
+                        className="editor-split-pane w-full overflow-hidden bg-[linear-gradient(135deg,rgba(59,130,246,0.12),rgba(168,85,247,0.09))] dark:bg-[linear-gradient(135deg,rgba(30,64,175,0.24),rgba(88,28,135,0.20))]"
                         style={{ 
-                          width: `calc(${(1 - splitRatio) * 100}%)`,
-                          height: 'calc(100vh - 200px)' 
+                          width: `calc(${(1 - splitRatio) * 100}%)`
                         }}
                       >
                         <MarkdownPreview
                           content={postContent}
-                          className="p-4"
+                          className="h-full p-5"
                           previewMode={previewMode}
                           hexoPath={hexoPath}
                           selectedPost={selectedPost}
@@ -3787,6 +5000,10 @@ ${selectedText}
                           forceRefresh={forcePreviewRefresh}
                           onForceRefreshComplete={() => setForcePreviewRefresh(false)}
                           iframeUrlMode={iframeUrlMode}
+                          giscusRepo={giscusRepo}
+                          giscusCategory={giscusCategory}
+                          giscusToken={giscusToken}
+                          language={language}
                         />
                       </div>
                     </div>
@@ -3794,9 +5011,9 @@ ${selectedText}
                 </div>
               </div>
             ) : (
-              <div className="flex-1 flex flex-col">
+              <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
                 {/* 文章列表头部 */}
-                <div className="border-b p-4 flex items-center justify-between">
+                <div className="border-b p-4 flex shrink-0 flex-wrap items-center justify-between gap-2">
                   <h2 className="text-lg font-semibold">{t.articleList}</h2>
                   <Button
                     variant="outline"
@@ -3814,10 +5031,11 @@ ${selectedText}
                 </div>
 
                 {/* 文章列表内容 */}
-                <div className="flex-1 p-6 overflow-auto">
+                <div className="app-scroll-area flex-1">
                   {isValidHexoProject ? (
-                    <PostList
-                      posts={filteredPosts}
+                    <div className="space-y-4">
+                      <PostList
+                        posts={filteredPosts}
                       selectedPost={selectedPost}
                       onPostSelect={(post) => {
                         selectPost(post);
@@ -3837,9 +5055,10 @@ ${selectedText}
                       currentFilter={currentFilter}
                       currentPage={currentPage}
                       postsPerPage={postsPerPage}
-                      onPageChange={setCurrentPage}
-                      language={language}
-                    />
+                        onPageChange={setCurrentPage}
+                        language={language}
+                      />
+                    </div>
                   ) : (
                     <div className="flex items-center justify-center h-full">
                       <div className="text-center space-y-4">
@@ -3858,7 +5077,7 @@ ${selectedText}
             )
           ) : (
             /* 配置视图 */
-            <div className="flex-1 p-6 overflow-auto">
+            <div className="app-scroll-area flex-1">
               <HexoConfig
                 hexoPath={hexoPath}
                 onConfigUpdate={() => {
@@ -3898,7 +5117,212 @@ ${selectedText}
         language={language}
         openaiModel={openaiModel}
         openaiApiEndpoint={openaiApiEndpoint}
+        openaiApiPath={openaiApiPath}
       />
+
+      {/* 图片引用选择对话框 */}
+      <Dialog open={showImagePickerDialog} onOpenChange={setShowImagePickerDialog}>
+        <DialogContent className="max-h-[88vh] max-w-[min(96vw,1100px)] overflow-hidden">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Image className="h-5 w-5 text-blue-600" />
+              {language === 'zh' ? '引用图片库' : 'Image Library'}
+            </DialogTitle>
+            <DialogDescription>
+              {language === 'zh'
+                ? '从 source/images 图片库中选择图片，或直接拖动图片到下方卡片上传后引用。'
+                : 'Choose an image from source/images, or drag images below to upload before inserting.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <Card
+            ref={imageManagerDropAreaRef}
+            className={`max-h-[calc(88vh-180px)] overflow-hidden border bg-background transition-colors ${isImageDragOver ? 'border-blue-400 bg-blue-50/70 dark:bg-blue-950/30' : 'border-border'}`}
+            onDragOver={handleImageDragOver}
+            onDragLeave={handleImageDragLeave}
+            onDrop={handleImageDrop}
+          >
+            <CardHeader className="pb-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <CardTitle className="text-sm">
+                  {language === 'zh' ? '已上传图片' : 'Uploaded Images'}
+                </CardTitle>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline">
+                    {language === 'zh' ? `${visibleUploadedImages.length}/${uploadedImages.length} 张` : `${visibleUploadedImages.length}/${uploadedImages.length} images`}
+                  </Badge>
+                  <Button
+                    variant={imageViewMode === 'list' ? 'default' : 'outline'}
+                    size="sm"
+                    className="h-8 px-2"
+                    onClick={() => setImageViewMode('list')}
+                    title={language === 'zh' ? '列表视图' : 'List view'}
+                  >
+                    <List className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    variant={imageViewMode === 'grid' ? 'default' : 'outline'}
+                    size="sm"
+                    className="h-8 px-2"
+                    onClick={() => setImageViewMode('grid')}
+                    title={language === 'zh' ? '图标视图' : 'Grid view'}
+                  >
+                    <Grid3X3 className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="max-h-[calc(88vh-250px)] space-y-4 overflow-auto pr-4">
+              <div className={`rounded-lg border border-dashed p-4 text-center transition-colors ${isImageDragOver ? 'border-blue-500 bg-blue-100/70 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300' : 'border-muted-foreground/30 bg-muted/20 text-muted-foreground'}`}>
+                <Upload className="mx-auto mb-2 h-7 w-7" />
+                <p className="text-sm font-medium">
+                  {isImageDragOver
+                    ? (language === 'zh' ? '松开鼠标上传到图片库' : 'Release to upload to image library')
+                    : (language === 'zh' ? '拖动图片到这里上传，或点击上传新图片' : 'Drag images here, or click to upload new images')}
+                </p>
+                <p className="mt-1 text-xs">
+                  {language === 'zh'
+                    ? `插入格式：![](${getNormalizedImageBaseUrl(imageBaseUrl)}图片名.png)`
+                    : `Inserted format: ![](${getNormalizedImageBaseUrl(imageBaseUrl)}image-name.png)`}
+                </p>
+                <div className="mt-3 flex items-center justify-center gap-2">
+                  <Button variant="outline" size="sm" onClick={uploadImageToSourceImages} disabled={isUploadingImage || isLoading}>
+                    <Upload className="w-4 h-4 mr-2" />
+                    {isUploadingImage ? (language === 'zh' ? '上传中...' : 'Uploading...') : (language === 'zh' ? '上传新图片' : 'Upload New Image')}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => loadImageFiles(hexoPath)} disabled={isUploadingImage || isLoading}>
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    {language === 'zh' ? '刷新列表' : 'Refresh List'}
+                  </Button>
+                </div>
+              </div>
+
+              {renderImageArticleFilterControls()}
+
+              {uploadedImages.length > 0 ? (
+                visibleUploadedImages.length > 0 ? (
+                  imageViewMode === 'list' ? (
+                    <div className="max-h-[48vh] overflow-auto rounded-lg border">
+                      {visibleUploadedImages.map((image) => (
+                        <div
+                          key={image.path}
+                          className="flex w-full items-center justify-between gap-3 border-b px-4 py-3 text-left text-sm transition-colors last:border-b-0 hover:bg-muted"
+                        >
+                          <span className="flex min-w-[220px] flex-1 items-center gap-2">
+                            <Image className="h-4 w-4 flex-shrink-0 text-blue-600" />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate font-medium">{image.name}</span>
+                              <span className="block text-xs text-muted-foreground">{formatUploadedImageSize(image.size)}</span>
+                              <span className="mt-1 block text-[10px] text-muted-foreground">
+                                {getImageArticleTag(image.name)
+                                  ? (language === 'zh' ? `文章：${getImageArticleTag(image.name)}` : `Post: ${getImageArticleTag(image.name)}`)
+                                  : (language === 'zh' ? '未关联文章' : 'No linked post')}
+                              </span>
+                            </span>
+                          </span>
+                          <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-1">
+                            {renderImageArticleTagSelect(image)}
+                            <span className="hidden max-w-80 truncate text-xs text-muted-foreground lg:inline">
+                              ![]({getImageReferenceUrl(image.name)})
+                            </span>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8"
+                              onClick={() => insertImageReference(image.name)}
+                            >
+                              {language === 'zh' ? '引用' : 'Insert'}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 w-8 p-0"
+                              onClick={() => renameUploadedImage(image)}
+                              title={language === 'zh' ? '重命名图片' : 'Rename image'}
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 w-8 p-0 text-red-600 hover:text-red-700"
+                              onClick={() => deleteUploadedImage(image)}
+                              title={language === 'zh' ? '删除图片' : 'Delete image'}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="grid max-h-[48vh] grid-cols-2 gap-4 overflow-auto pr-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                      {visibleUploadedImages.map((image) => (
+                        <div
+                          key={image.path}
+                          className="min-w-0 rounded-xl border p-4 text-center transition-colors hover:border-blue-300 hover:bg-blue-50/60 dark:hover:bg-blue-950/30"
+                          title={`![](${getImageReferenceUrl(image.name)})`}
+                        >
+                          <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-300">
+                            <Image className="h-8 w-8" />
+                          </div>
+                          <div className="truncate text-xs font-medium">{image.name}</div>
+                          <div className="mt-1 text-[10px] text-muted-foreground">{formatUploadedImageSize(image.size)}</div>
+                          <div className="mt-2 flex justify-center">
+                            {renderImageArticleTagSelect(image, true)}
+                          </div>
+                          <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={() => insertImageReference(image.name)}
+                            >
+                              {language === 'zh' ? '引用' : 'Insert'}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0"
+                              onClick={() => renameUploadedImage(image)}
+                              title={language === 'zh' ? '重命名图片' : 'Rename image'}
+                            >
+                              <Edit className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0 text-red-600 hover:text-red-700"
+                              onClick={() => deleteUploadedImage(image)}
+                              title={language === 'zh' ? '删除图片' : 'Delete image'}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                ) : (
+                  renderNoVisibleUploadedImages()
+                )
+              ) : (
+                <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-8 text-center text-muted-foreground">
+                  <Image className="mb-3 h-10 w-10" />
+                  <p className="text-sm">{language === 'zh' ? 'source/images 目录下暂无图片' : 'No images found under source/images'}</p>
+                  <p className="mt-1 text-xs">{language === 'zh' ? '请先拖动或上传图片后再引用。' : 'Drag or upload an image before inserting a reference.'}</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowImagePickerDialog(false)}>
+              {t.cancel}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* AI分析对话框 */}
       <AIAnalysisDialog
@@ -3912,6 +5336,7 @@ ${selectedText}
         publishStatsData={publishStatsData}
         openaiModel={openaiModel}
         openaiApiEndpoint={openaiApiEndpoint}
+        openaiApiPath={openaiApiPath}
       />
 
       {/* 删除文章确认对话框 */}

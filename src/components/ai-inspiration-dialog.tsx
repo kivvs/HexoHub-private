@@ -6,9 +6,10 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Loader2, Lightbulb, X } from 'lucide-react';
+import { Loader2, Lightbulb, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { getTexts } from '@/utils/i18n';
 import { isTauri } from '@/lib/desktop-api';
+import { buildAiApiUrl } from '@/lib/utils';
 
 interface AIInspirationDialogProps {
   open: boolean;
@@ -19,19 +20,30 @@ interface AIInspirationDialogProps {
   language: 'zh' | 'en';
   openaiModel?: string;
   openaiApiEndpoint?: string;
+  openaiApiPath?: string;
 }
 
-export function AIInspirationDialog({ open, onOpenChange, aiProvider, apiKey, prompt, language, openaiModel = 'gpt-3.5-turbo', openaiApiEndpoint = 'https://api.openai.com/v1' }: AIInspirationDialogProps) {
+export function AIInspirationDialog({ open, onOpenChange, aiProvider, apiKey, prompt, language, openaiModel = 'gpt-3.5-turbo', openaiApiEndpoint = 'https://api.openai.com/v1', openaiApiPath = '/chat/completions' }: AIInspirationDialogProps) {
   const [inspiration, setInspiration] = useState<string>('');
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [displayedText, setDisplayedText] = useState<string>('');
   const [isTyping, setIsTyping] = useState<boolean>(false);
   const typingRef = useRef<NodeJS.Timeout | null>(null);
   const t = getTexts(language);
+  // 可编辑的提示词（仅本次对话框内有效，不保存到设置）
+  const [editablePrompt, setEditablePrompt] = useState<string>(prompt);
+  const [showPromptEditor, setShowPromptEditor] = useState<boolean>(false);
+
+  // 外部 prompt 变化时同步到本地可编辑值（对话框未打开时）
+  useEffect(() => {
+    if (!open) {
+      setEditablePrompt(prompt);
+    }
+  }, [prompt, open]);
 
   // 生成AI灵感
   const generateInspiration = async () => {
-    if (!apiKey || !prompt) return;
+    if (!apiKey || !editablePrompt) return;
 
     setIsGenerating(true);
     setInspiration('');
@@ -40,19 +52,33 @@ export function AIInspirationDialog({ open, onOpenChange, aiProvider, apiKey, pr
 
     try {
       // 根据提供商选择API端点和模型
-      let apiUrl: string;
+      const apiUrl = buildAiApiUrl(aiProvider, openaiApiEndpoint, openaiApiPath);
       let model: string;
-      
+
       if (aiProvider === 'deepseek') {
-        apiUrl = 'https://api.deepseek.com/v1/chat/completions';
         model = 'deepseek-chat';
       } else if (aiProvider === 'siliconflow') {
-        apiUrl = 'https://api.siliconflow.cn/v1/chat/completions';
         model = openaiModel || 'Qwen/Qwen2.5-7B-Instruct';
       } else {
-        apiUrl = `${openaiApiEndpoint}/chat/completions`;
         model = openaiModel || 'gpt-3.5-turbo';
       }
+
+      const requestBody = JSON.stringify({
+        model: model,
+        messages: [
+          {
+            role: 'user',
+            content: editablePrompt
+          }
+        ],
+        temperature: 0.7,
+        max_tokens: 500
+      });
+
+      const requestHeaders = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      };
 
       // 调用AI API - 在 Tauri 环境下使用 Tauri HTTP 插件
       let response;
@@ -60,40 +86,14 @@ export function AIInspirationDialog({ open, onOpenChange, aiProvider, apiKey, pr
         const { fetch: tauriFetch } = await import('@tauri-apps/plugin-http');
         response = await tauriFetch(apiUrl, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({
-            model: model,
-            messages: [
-              {
-                role: 'user',
-                content: prompt
-              }
-            ],
-            temperature: 0.7,
-            max_tokens: 500
-          })
+          headers: requestHeaders,
+          body: requestBody
         });
       } else {
         response = await fetch(apiUrl, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({
-            model: model,
-            messages: [
-              {
-                role: 'user',
-                content: prompt
-              }
-            ],
-            temperature: 0.7,
-            max_tokens: 500
-          })
+          headers: requestHeaders,
+          body: requestBody
         });
       }
 
@@ -175,6 +175,45 @@ export function AIInspirationDialog({ open, onOpenChange, aiProvider, apiKey, pr
               placeholder={t.aiInspirationDescription}
             />
           </div>
+
+          {/* 可折叠的提示词编辑区（仅本次有效，不保存到设置） */}
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => setShowPromptEditor(!showPromptEditor)}
+              className="flex items-center text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {showPromptEditor ? <ChevronDown className="w-4 h-4 mr-1" /> : <ChevronUp className="w-4 h-4 mr-1" />}
+              {language === 'zh' ? '编辑提示词（仅本次有效）' : 'Edit prompt (this session only)'}
+            </button>
+
+            {showPromptEditor && (
+              <div className="space-y-2 rounded-md border p-3 bg-muted/30">
+                <Textarea
+                  value={editablePrompt}
+                  onChange={(e) => setEditablePrompt(e.target.value)}
+                  className="min-h-[100px] resize-none text-sm"
+                  placeholder={t.promptPlaceholder}
+                />
+                <div className="flex justify-between items-center">
+                  <p className="text-xs text-muted-foreground">
+                    {language === 'zh'
+                      ? '修改后点击"重新生成"即可使用新提示词，不会保存到设置'
+                      : 'Click "Get Inspiration" to use the new prompt. Changes will not be saved to settings.'}
+                  </p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs h-7"
+                    onClick={() => setEditablePrompt(prompt)}
+                  >
+                    {language === 'zh' ? '恢复默认' : 'Reset'}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="flex justify-end space-x-2">
             <Button
               variant="outline"

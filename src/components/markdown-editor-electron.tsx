@@ -45,6 +45,7 @@ interface MarkdownEditorProps {
   apiKey?: string;
   openaiModel?: string;
   openaiApiEndpoint?: string;
+  openaiApiPath?: string;
 }
 
 export function MarkdownEditorElectron({ 
@@ -60,7 +61,8 @@ export function MarkdownEditorElectron({
   aiProvider = 'deepseek',
   apiKey = '',
   openaiModel = 'gpt-3.5-turbo',
-  openaiApiEndpoint = 'https://api.openai.com/v1'
+  openaiApiEndpoint = 'https://api.openai.com/v1',
+  openaiApiPath = '/chat/completions'
 }: MarkdownEditorProps) {
   const [lineNumbers, setLineNumbers] = useState<string[]>(['1']);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -521,11 +523,11 @@ ${selectedText}
   };
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ height: 'calc(100vh - 200px)' }}>
-      <div className="flex-1 flex relative" style={{ minWidth: 0, maxWidth: '100%', height: 'calc(100vh - 200px)' }}>
+    <div className="h-full min-h-0 min-w-0 flex flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
+      <div className="flex-1 min-h-0 min-w-0 flex relative" style={{ maxWidth: '100%' }}>
         <div
           id="line-numbers"
-          className="w-12 bg-background border-r text-muted-foreground text-sm font-mono text-right pr-2 pt-2 select-none overflow-hidden flex-shrink-0"
+          className="w-12 bg-slate-100 border-r border-slate-200 text-slate-400 text-sm font-mono text-right pr-2 pt-2 select-none overflow-hidden flex-shrink-0 dark:bg-slate-900 dark:border-slate-800 dark:text-slate-500"
         >
           {lineNumbers.map((lineNumber, index) => (
             <div key={index} className="leading-6">
@@ -536,13 +538,14 @@ ${selectedText}
 
         <div
           ref={dropAreaRef}
-          className={`flex-1 relative min-w-0 overflow-hidden \${isDragOver ? 'bg-blue-50 border-2 border-blue-300 border-dashed' : ''}`}
+          className={`flex-1 relative min-w-0 overflow-hidden bg-slate-50 dark:bg-slate-950 ${isDragOver ? 'bg-blue-50 border-2 border-blue-300 border-dashed' : ''}`}
           onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
           <EditorContextMenu
+            className="h-full w-full"
             selectedText={selectedText}
             onRewrite={handleRewrite}
             onCopy={handleCopy}
@@ -555,6 +558,7 @@ ${selectedText}
             language={language}
             openaiModel={openaiModel}
             openaiApiEndpoint={openaiApiEndpoint}
+            openaiApiPath={openaiApiPath}
             enableAI={enableAI}
             posts={posts || []}
             hexoPath={hexoPath}
@@ -567,20 +571,23 @@ ${selectedText}
               onScroll={handleTextareaScroll}
               onSelect={handleTextareaSelect}
               placeholder={t.editorPlaceholder}
-              className="w-full h-full p-2 font-mono text-sm resize-none border-0 rounded-none focus:ring-0 overflow-x-auto"
+              className="w-full h-full p-4 font-mono text-sm resize-none border-0 rounded-none bg-slate-50 text-slate-800 caret-blue-600 focus:ring-0 overflow-x-auto dark:bg-slate-950 dark:text-slate-200"
               disabled={isLoading}
               style={{
-                minHeight: '400px',
+                minHeight: 0,
                 lineHeight: '1.5',
                 outline: 'none',
                 width: '100%',
                 minWidth: 0,
                 overflow: 'auto',
                 wordBreak: 'break-all',
-                height: 'calc(100vh - 200px)'
+                height: '100%'
               }}
             />
           </EditorContextMenu>
+          <div className="pointer-events-none absolute right-4 top-3 rounded-full border border-slate-200 bg-white/85 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/85 dark:text-slate-400">
+            SOURCE
+          </div>
           {isDragOver && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <div className="text-blue-600 text-lg font-medium">

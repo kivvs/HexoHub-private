@@ -146,6 +146,8 @@ const WindowsCompat = {
   
   /**
    * 包装命令：Windows 用 PowerShell（UTF-8），其他平台直接返回
+   * 注意：必须追加 `; exit $LASTEXITCODE`，否则 PowerShell 在外部命令写 stderr
+   * （如 git push 的进度信息）时会误判为失败，导致退出码非 0
    */
   wrapCommand: (command) => {
     if (!WindowsCompat.isWindows()) {
@@ -153,7 +155,7 @@ const WindowsCompat = {
     }
     // 使用更安全的转义方式，避免影响标题内容
     const escaped = command.replace(/"/g, '""');
-    return `powershell -NoProfile -Command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${escaped}"`;
+    return `powershell -NoProfile -Command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${escaped}; exit $LASTEXITCODE"`;
   }
 };
 
@@ -192,7 +194,7 @@ function createWindow() {
   });
 
   if (isDev) {
-    mainWindow.loadURL('http://localhost:3000');
+    mainWindow.loadURL('http://localhost:4001');
   } else {
     // 使用 loadFile 而不是 loadURL
     const indexPath = path.join(__dirname, '../out/index.html');
@@ -626,14 +628,21 @@ ipcMain.handle('start-hexo-server', async (event, workingDir, customCommand) => 
       // 监听错误输出
       hexoServerProcess.stderr.on('data', (data) => {
         const errorText = data.toString();
+        errorOutput += errorText;
       });
 
       // 监听进程退出
       hexoServerProcess.on('exit', (code) => {
         if (!serverStarted) {
+          // 检测端口占用错误（EADDRINUSE），返回前端可识别的错误消息
+          const isPortConflict = errorOutput.includes('EADDRINUSE') ||
+            errorOutput.includes('address already in use') ||
+            errorOutput.includes('地址已经被使用');
           resolve({
             success: false,
-            error: `服务器启动失败，退出码: ${code}`,
+            error: isPortConflict
+              ? '端口 4000 已被占用 (EADDRINUSE)'
+              : `服务器启动失败，退出码: ${code}`,
             stderr: errorOutput,
           });
         }
@@ -672,24 +681,76 @@ ipcMain.handle('start-hexo-server', async (event, workingDir, customCommand) => 
 // 停止Hexo服务器
 ipcMain.handle('stop-hexo-server', async () => {
   try {
+    const util = require('util');
+    const exec = require('child_process').exec;
+    const execAsync = util.promisify(exec);
+
+    let hadProcess = false;
     if (hexoServerProcess) {
-      // Windows下需要强制终止进程树
+      hadProcess = true;
+      // Windows下需要强制终止进程树，并同步等待完成
       if (WindowsCompat.isWindows()) {
-        const { exec } = require('child_process');
-        exec(`taskkill /pid ${hexoServerProcess.pid} /T /F`, (error) => {
-          if (error) {
-            console.error('强制终止进程失败:', error);
-          }
-        });
+        try {
+          await execAsync(`taskkill /pid ${hexoServerProcess.pid} /T /F`);
+        } catch (e) {
+          // 进程可能已退出
+        }
       } else {
         hexoServerProcess.kill('SIGTERM');
       }
 
       hexoServerProcess = null;
+    }
 
+    // 无论 hexoServerProcess 是否存在，都额外清理端口 4000 残留进程
+    // 覆盖应用重启后状态丢失、进程残留等场景
+    let killedCount = 0;
+    try {
+      if (WindowsCompat.isWindows()) {
+        const { stdout } = await execAsync('netstat -ano | findstr :4000');
+        // 兼容中文 Windows（"侦听"）和英文 Windows（"LISTENING"）
+        const lines = stdout.split('\n').filter(l =>
+          l.includes('LISTENING') || l.includes('侦听')
+        );
+        for (const line of lines) {
+          const parts = line.trim().split(/\s+/);
+          const pid = parts[parts.length - 1];
+          if (pid && !isNaN(parseInt(pid))) {
+            try {
+              await execAsync(`taskkill /F /PID ${pid}`);
+              killedCount++;
+            } catch (e) {
+              // 进程可能已退出
+            }
+          }
+        }
+      } else {
+        // Unix：先解析 pids 再判断，避免 xargs 空输入导致误计数
+        try {
+          const { stdout } = await execAsync('lsof -ti:4000');
+          const pids = stdout.trim().split('\n').filter(Boolean);
+          if (pids.length > 0) {
+            await execAsync('lsof -ti:4000 | xargs kill -9');
+            killedCount = pids.length;
+          }
+        } catch (e) {
+          // 端口未被占用
+        }
+      }
+      if (killedCount > 0) {
+        // 等待端口完全释放
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    } catch (e) {
+      // netstat/lsof 没找到进程会抛错，忽略
+    }
+
+    if (hadProcess || killedCount > 0) {
       return {
         success: true,
-        stdout: '服务器已停止'
+        stdout: killedCount > 0
+          ? `服务器已停止，额外清理 ${killedCount} 个残留进程，端口已释放`
+          : '服务器已停止'
       };
     } else {
       return {
@@ -701,6 +762,96 @@ ipcMain.handle('stop-hexo-server', async () => {
     return {
       success: false,
       error: '停止服务器失败: ' + error.message
+    };
+  }
+});
+
+// 修复端口冲突（释放指定端口，同步等待完成）
+// 前端 startHexoServer 在端口冲突时调用，但之前 Electron 端缺失此 handler
+ipcMain.handle('fix-port-conflict', async (event, port) => {
+  try {
+    // 校验 port 参数，防止命令注入
+    const portNum = Number(port);
+    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+      return { success: false, error: '无效的端口号: ' + port };
+    }
+    const portStr = String(portNum);
+
+    const util = require('util');
+    const exec = require('child_process').exec;
+    const execAsync = util.promisify(exec);
+
+    if (WindowsCompat.isWindows()) {
+      // 查找占用端口的进程
+      let stdout = '';
+      try {
+        const result = await execAsync(`netstat -ano | findstr :${portStr}`);
+        stdout = result.stdout;
+      } catch (e) {
+        // netstat 没找到进程会返回非零退出码
+        return {
+          success: true,
+          stdout: `端口 ${portStr} 未被占用`
+        };
+      }
+
+      // 兼容中文 Windows（"侦听"）和英文 Windows（"LISTENING"）
+      const lines = stdout.split('\n').filter(l =>
+        l.includes('LISTENING') || l.includes('侦听')
+      );
+      let killedCount = 0;
+
+      for (const line of lines) {
+        const parts = line.trim().split(/\s+/);
+        const pid = parts[parts.length - 1];
+        if (pid && !isNaN(parseInt(pid))) {
+          try {
+            await execAsync(`taskkill /F /PID ${pid}`);
+            killedCount++;
+          } catch (e) {
+            // 进程可能已退出
+          }
+        }
+      }
+
+      if (killedCount > 0) {
+        // 等待端口完全释放
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return {
+          success: true,
+          stdout: `已成功终止 ${killedCount} 个占用端口 ${portStr} 的进程`
+        };
+      } else {
+        return {
+          success: true,
+          stdout: `端口 ${portStr} 未被占用`
+        };
+      }
+    } else {
+      // Linux/Mac
+      try {
+        const { stdout } = await execAsync(`lsof -ti:${portStr}`);
+        const pids = stdout.trim().split('\n').filter(Boolean);
+        if (pids.length > 0) {
+          await execAsync(`lsof -ti:${portStr} | xargs kill -9`);
+          await new Promise(resolve => setTimeout(resolve, 500));
+          return {
+            success: true,
+            stdout: `已成功终止占用端口 ${portStr} 的进程`
+          };
+        }
+      } catch (e) {
+        // lsof 没找到进程
+      }
+      return {
+        success: true,
+        stdout: `端口 ${portStr} 未被占用`
+      };
+    }
+  } catch (error) {
+    return {
+      success: false,
+      error: '修复端口冲突失败: ' + error.message
     };
   }
 });

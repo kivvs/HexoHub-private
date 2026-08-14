@@ -21,11 +21,12 @@ import { AIDeepImitationDialog } from '@/components/ai-deep-imitation-dialog';
 interface Post {
   name: string;
   path: string;
-  modifiedTime: Date;
+  modifiedTime?: Date;
 }
 
 interface EditorContextMenuProps {
   children: React.ReactNode;
+  className?: string;
   selectedText: string;
   onRewrite: (rewrittenText: string) => void;
   onCopy: () => void;
@@ -38,6 +39,7 @@ interface EditorContextMenuProps {
   language: 'zh' | 'en';
   openaiModel?: string;
   openaiApiEndpoint?: string;
+  openaiApiPath?: string;
   enableAI?: boolean;
   posts?: Post[];
   hexoPath?: string;
@@ -48,6 +50,7 @@ const MENU_ID = 'editor-context-menu';
 
 export function EditorContextMenu({
   children,
+  className,
   selectedText,
   onRewrite,
   onCopy,
@@ -60,6 +63,7 @@ export function EditorContextMenu({
   language,
   openaiModel = 'gpt-3.5-turbo',
   openaiApiEndpoint = 'https://api.openai.com/v1',
+  openaiApiPath = '/chat/completions',
   enableAI = false,
   posts = [],
   hexoPath = '',
@@ -92,8 +96,8 @@ export function EditorContextMenu({
   };
 
   return (
-    <div>
-      <div onContextMenu={handleContextMenu}>
+    <div className={className}>
+      <div className="h-full w-full" onContextMenu={handleContextMenu}>
         {children}
       </div>
 
@@ -250,6 +254,7 @@ export function EditorContextMenu({
         language={language}
         openaiModel={openaiModel}
         openaiApiEndpoint={openaiApiEndpoint}
+        openaiApiPath={openaiApiPath}
       />
       
       {/* AI 深度模仿对话框 */}
@@ -265,6 +270,7 @@ export function EditorContextMenu({
         language={language}
         openaiModel={openaiModel}
         openaiApiEndpoint={openaiApiEndpoint}
+        openaiApiPath={openaiApiPath}
       />
     </div>
   );
