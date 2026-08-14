@@ -9,7 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Settings, Save, RotateCcw, Download, Upload, Palette, Check, RefreshCw } from 'lucide-react';
+import { Settings, Save, RotateCcw, Download, Upload } from 'lucide-react';
 import { Language, getTexts } from '@/utils/i18n';
 import { isDesktopApp, getIpcRenderer } from '@/lib/desktop-api';
 
@@ -38,10 +38,6 @@ export function HexoConfig({ hexoPath, onConfigUpdate }: HexoConfigProps) {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [saveResult, setSaveResult] = useState<{ success: boolean; message: string } | null>(null);
   const [language, setLanguage] = useState<Language>('zh');
-  // 博客主题切换
-  const [availableThemes, setAvailableThemes] = useState<string[]>([]);
-  const [isLoadingThemes, setIsLoadingThemes] = useState<boolean>(false);
-  const [switchingTheme, setSwitchingTheme] = useState<string | null>(null);
   
   // 获取当前语言的文本
   const t = getTexts(language);
@@ -57,83 +53,6 @@ export function HexoConfig({ hexoPath, onConfigUpdate }: HexoConfigProps) {
     }
   }, []);
 
-  // 扫描 themes 目录，获取已安装的博客主题列表
-  const loadBlogThemes = async () => {
-    if (!isDesktopApp() || !hexoPath) return;
-
-    setIsLoadingThemes(true);
-    try {
-      const ipcRenderer = await getIpcRenderer();
-      const themesPath = `${hexoPath}/themes`;
-      const files = await ipcRenderer.invoke('list-files', themesPath);
-      const themes = files
-        .filter((file: any) => file.isDirectory && !file.name.startsWith('.'))
-        .map((file: any) => file.name)
-        .sort((a: string, b: string) => a.localeCompare(b));
-      setAvailableThemes(themes);
-    } catch (error) {
-      console.warn('扫描博客主题目录失败（可能尚未创建 themes 目录）:', error);
-      setAvailableThemes([]);
-    } finally {
-      setIsLoadingThemes(false);
-    }
-  };
-
-  // 一键切换博客主题：修改 _config.yml 中的 theme 字段并保存
-  const switchBlogTheme = async (themeName: string) => {
-    if (!isDesktopApp() || !hexoPath || switchingTheme) return;
-    if (themeName === configData.theme) return;
-
-    setSwitchingTheme(themeName);
-    try {
-      updateConfigField('theme', themeName);
-
-      const ipcRenderer = await getIpcRenderer();
-      const configPath = `${hexoPath}/_config.yml`;
-      // 等待状态更新后写入（直接基于当前 rawConfig 写入）
-      const updatedLines = rawConfig.split('\n');
-      let fieldUpdated = false;
-      const lines = updatedLines.map(line => {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('#') || !trimmed.includes(':')) return line;
-        const [key] = trimmed.split(':');
-        if (key.trim() === 'theme') {
-          fieldUpdated = true;
-          const indent = line.match(/^(\s*)/)?.[1] || '';
-          return `${indent}theme: ${themeName}`;
-        }
-        return line;
-      });
-      if (!fieldUpdated) {
-        lines.push(`theme: ${themeName}`);
-      }
-      const newConfig = lines.join('\n');
-      await ipcRenderer.invoke('write-file', configPath, newConfig);
-
-      setRawConfig(newConfig);
-      setConfigData(prev => ({ ...prev, theme: themeName }));
-
-      setSaveResult({
-        success: true,
-        message: language === 'zh'
-          ? `博客主题已切换为「${themeName}」，重新生成后生效`
-          : `Blog theme switched to "${themeName}", rebuild to apply`
-      });
-
-      if (onConfigUpdate) {
-        onConfigUpdate();
-      }
-    } catch (error) {
-      console.error('切换博客主题失败:', error);
-      setSaveResult({
-        success: false,
-        message: (language === 'zh' ? '切换博客主题失败: ' : 'Failed to switch theme: ') + (error instanceof Error ? error.message : String(error))
-      });
-    } finally {
-      setSwitchingTheme(null);
-    }
-  };
-
   // 加载配置文件
   const loadConfig = async () => {
     if (!isDesktopApp() || !hexoPath) return;
@@ -146,7 +65,6 @@ export function HexoConfig({ hexoPath, onConfigUpdate }: HexoConfigProps) {
 
       setRawConfig(content);
       parseConfig(content);
-      loadBlogThemes();
     } catch (error) {
       console.error('加载配置失败:', error);
       setSaveResult({
@@ -234,7 +152,7 @@ export function HexoConfig({ hexoPath, onConfigUpdate }: HexoConfigProps) {
       console.error('保存配置失败:', error);
       setSaveResult({
         success: false,
-        message: '保存配置失败: ' + error.message
+        message: '保存配置失败: ' + (error instanceof Error ? error.message : String(error))
       });
     } finally {
       setIsLoading(false);
@@ -467,81 +385,6 @@ export function HexoConfig({ hexoPath, onConfigUpdate }: HexoConfigProps) {
                 />
               </div>
             </div>
-
-          {/* 已安装博客主题一键切换 */}
-          <div className="space-y-3 rounded-xl border border-border bg-muted/20 p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Palette className="h-4 w-4 text-blue-600" />
-                <Label className="text-base font-medium">
-                  {language === 'zh' ? '博客主题一键切换' : 'One-Click Blog Theme Switch'}
-                </Label>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={loadBlogThemes}
-                disabled={isLoadingThemes}
-              >
-                <RefreshCw className={`w-3.5 h-3.5 mr-1 ${isLoadingThemes ? 'animate-spin' : ''}`} />
-                {language === 'zh' ? '刷新' : 'Refresh'}
-              </Button>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              {language === 'zh'
-                ? '自动扫描 themes 目录中的已安装主题，点击即可修改 _config.yml 的 theme 字段并保存（重新生成后生效）。'
-                : 'Scans installed themes under themes/. Click to update the theme field in _config.yml and save (applies after rebuild).'}
-            </p>
-
-            {isLoadingThemes ? (
-              <div className="flex items-center justify-center rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-                {language === 'zh' ? '正在扫描已安装主题...' : 'Scanning installed themes...'}
-              </div>
-            ) : availableThemes.length > 0 ? (
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-                {availableThemes.map((themeName) => {
-                  const isActive = themeName === configData.theme;
-                  const isSwitching = switchingTheme === themeName;
-                  return (
-                    <button
-                      key={themeName}
-                      type="button"
-                      onClick={() => switchBlogTheme(themeName)}
-                      disabled={isSwitching || isActive}
-                      className={`rounded-lg border p-3 text-left transition-all hover:-translate-y-0.5 hover:shadow-md ${
-                        isActive
-                          ? 'border-green-400 bg-green-50 ring-2 ring-green-400/30 dark:bg-green-950/30'
-                          : 'border-border bg-background hover:border-blue-400'
-                      }`}
-                      title={isActive
-                        ? (language === 'zh' ? '当前使用的主题' : 'Current theme')
-                        : (language === 'zh' ? `一键切换到 ${themeName}` : `Switch to ${themeName}`)}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="truncate font-medium">{themeName}</span>
-                        {isActive ? (
-                          <Check className="h-4 w-4 flex-shrink-0 text-green-600" />
-                        ) : isSwitching ? (
-                          <RefreshCw className="h-4 w-4 flex-shrink-0 animate-spin text-blue-500" />
-                        ) : null}
-                      </div>
-                      <div className={`mt-1 text-[11px] ${isActive ? 'text-green-700 dark:text-green-300' : 'text-muted-foreground'}`}>
-                        {isActive
-                          ? (language === 'zh' ? '使用中' : 'Active')
-                          : (language === 'zh' ? '点击切换' : 'Click to switch')}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-                {language === 'zh'
-                  ? 'themes 目录下未发现已安装主题，请先安装主题（例如 git clone 到 themes 目录）后点击刷新。'
-                  : 'No installed themes found under themes/. Install a theme first, then click Refresh.'}
-              </div>
-            )}
-          </div>
 
           <div className="space-y-2">
             <Label htmlFor="description">{t.websiteDescription}</Label>

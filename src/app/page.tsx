@@ -70,6 +70,7 @@ import { CreatePostDialog } from '@/components/create-post-dialog';
 import { TagCloud } from '@/components/tag-cloud';
 import { PublishStats } from '@/components/publish-stats';
 import { PanelSettings } from '@/components/panel-settings';
+import { BlogThemePanel } from '@/components/blog-theme-panel';
 import { ExternalAnalyticsCards } from '@/components/external-analytics-cards';
 import { GiscusCommentsAnalyticsPage, Ga4ViewsAnalyticsPage } from '@/components/external-analytics-pages';
 import { useToast } from '@/hooks/use-toast';
@@ -3923,6 +3924,32 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
             }}
           />
 
+          {/* 博客主题 */}
+          <Card className="m-4">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm flex items-center">
+                <Palette className="w-4 h-4 mr-2 text-blue-600" />
+                {language === 'zh' ? '博客主题' : 'Blog Theme'}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => {
+                  setSelectedPost(null);
+                  setMainView('blog-theme');
+                }}
+                disabled={!isValidHexoProject || isLoading}
+                title={language === 'zh' ? '一键切换博客主题' : 'Switch blog theme'}
+              >
+                <Palette className="w-4 h-4 mr-2" />
+                {language === 'zh' ? '主题管理' : 'Theme Manager'}
+              </Button>
+            </CardContent>
+          </Card>
+
           {/* 面板设置 */}
           <Card className="m-4">
             <CardHeader className="pb-3">
@@ -4014,6 +4041,10 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
               propertyId={ga4PropertyId}
               serviceAccountJson={ga4ServiceAccountJson}
             />
+          ) : mainView === 'blog-theme' ? (
+            <div className="app-scroll-area flex-1">
+              <BlogThemePanel hexoPath={hexoPath} language={language} />
+            </div>
           ) : mainView === 'settings' ? (
             <div className="app-scroll-area flex-1">
               <PanelSettings

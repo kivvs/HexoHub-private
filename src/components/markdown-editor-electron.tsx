@@ -523,11 +523,11 @@ ${selectedText}
   };
 
   return (
-    <div className="h-full min-h-0 min-w-0 flex flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
+    <div className="markdown-editor h-full min-h-0 min-w-0 flex flex-col overflow-hidden">
       <div className="flex-1 min-h-0 min-w-0 flex relative" style={{ maxWidth: '100%' }}>
         <div
           id="line-numbers"
-          className="w-12 bg-slate-100 border-r border-slate-200 text-slate-400 text-sm font-mono text-right pr-2 pt-2 select-none overflow-hidden flex-shrink-0 dark:bg-slate-900 dark:border-slate-800 dark:text-slate-500"
+          className="w-12 bg-muted border-r border-border text-muted-foreground text-sm font-mono text-right pr-2 pt-2 select-none overflow-hidden flex-shrink-0"
         >
           {lineNumbers.map((lineNumber, index) => (
             <div key={index} className="leading-6">
@@ -538,7 +538,7 @@ ${selectedText}
 
         <div
           ref={dropAreaRef}
-          className={`flex-1 relative min-w-0 overflow-hidden bg-slate-50 dark:bg-slate-950 ${isDragOver ? 'bg-blue-50 border-2 border-blue-300 border-dashed' : ''}`}
+          className={`flex-1 relative min-w-0 overflow-hidden ${isDragOver ? 'bg-blue-50 border-2 border-blue-300 border-dashed' : ''}`}
           onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -571,7 +571,7 @@ ${selectedText}
               onScroll={handleTextareaScroll}
               onSelect={handleTextareaSelect}
               placeholder={t.editorPlaceholder}
-              className="w-full h-full p-4 font-mono text-sm resize-none border-0 rounded-none bg-slate-50 text-slate-800 caret-blue-600 focus:ring-0 overflow-x-auto dark:bg-slate-950 dark:text-slate-200"
+              className="w-full h-full p-4 font-mono text-sm resize-none border-0 rounded-none bg-transparent caret-primary focus:ring-0 overflow-x-auto"
               disabled={isLoading}
               style={{
                 minHeight: 0,
@@ -581,11 +581,14 @@ ${selectedText}
                 minWidth: 0,
                 overflow: 'auto',
                 wordBreak: 'break-all',
-                height: '100%'
+                height: '100%',
+                color: 'var(--foreground)',
+                WebkitTextFillColor: 'var(--foreground)',
+                caretColor: 'var(--primary)'
               }}
             />
           </EditorContextMenu>
-          <div className="pointer-events-none absolute right-4 top-3 rounded-full border border-slate-200 bg-white/85 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/85 dark:text-slate-400">
+          <div className="pointer-events-none absolute right-4 top-3 rounded-full border border-border bg-background/85 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground shadow-sm backdrop-blur">
             SOURCE
           </div>
           {isDragOver && (

@@ -298,16 +298,27 @@ html[data-app-theme="sunset"] {
     background-color: rgba(from var(--background) r g b / var(--bg-opacity, 1)) !important;
   }
   
-  /* 特殊处理编辑器和预览区域 */
+  /* 特殊处理编辑器和预览区域（跟随主题变量） */
   .markdown-editor, .markdown-preview {
-    background-color: rgba(255, 255, 255, 0.95);
+    background-color: var(--card);
+    color: var(--card-foreground);
     border-radius: 0.5rem;
   }
-  
-  .dark .markdown-editor, .dark .markdown-preview {
-    background-color: rgba(20, 20, 20, 0.95);
+
+  /* 编辑器中文本输入与占位符颜色跟随主题，并添加 Webkit 兜底 */
+  .markdown-editor textarea {
+    color: var(--foreground);
+    -webkit-text-fill-color: var(--foreground);
+    caret-color: var(--primary);
+    background-color: transparent;
   }
-  
+
+  .markdown-editor textarea::placeholder {
+    color: var(--muted-foreground);
+    -webkit-text-fill-color: var(--muted-foreground);
+    opacity: 1;
+  }
+
   /* 确保编辑器和预览区域的文字清晰可见 */
   .markdown-editor *, .markdown-preview * {
     opacity: 1 !important;
