@@ -73,6 +73,17 @@ async fn write_file(file_path: String, content: String) -> Result<bool, String> 
         .map_err(|e| e.to_string())
 }
 
+// 从字节数组写入文件（二进制，如图片下载）
+#[tauri::command]
+async fn write_file_from_buffer(file_path: String, bytes: Vec<u8>) -> Result<bool, String> {
+    if let Some(parent) = PathBuf::from(&file_path).parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(&file_path, bytes)
+        .map(|_| true)
+        .map_err(|e| e.to_string())
+}
+
 // 删除文件
 #[tauri::command]
 async fn delete_file(file_path: String) -> Result<bool, String> {
@@ -997,6 +1008,7 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
         read_file,
         write_file,
+        write_file_from_buffer,
         delete_file,
         copy_file,
         list_files,

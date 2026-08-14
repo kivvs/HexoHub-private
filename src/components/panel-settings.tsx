@@ -15,6 +15,7 @@ import { getTexts } from '@/utils/i18n';
 import { isDesktopApp, getIpcRenderer, isTauri } from '@/lib/desktop-api';
 import { openExternalLink, getAppVersion, buildAiApiUrl, localizeApiError } from '@/lib/utils';
 import { copySystemInfo } from '@/lib/system-info';
+import { AppThemeName, APP_THEME_OPTIONS, getAppThemeOption } from '@/lib/theme';
 
 interface PanelSettingsProps {
   postsPerPage: number;
@@ -32,6 +33,8 @@ interface PanelSettingsProps {
   onBackgroundImageChange?: (value: string) => void;
   backgroundOpacity?: number;
   onBackgroundOpacityChange?: (value: number) => void;
+  currentTheme?: AppThemeName;
+  onThemeChange?: (theme: AppThemeName) => void;
   language: 'zh' | 'en';
   // 推送设置
   enablePush?: boolean;
@@ -118,6 +121,8 @@ export function PanelSettings({
   onBackgroundImageChange,
   backgroundOpacity = 1,
   onBackgroundOpacityChange,
+  currentTheme = 'system',
+  onThemeChange,
   language,
   enablePush = false,
   onEnablePushChange,
@@ -217,6 +222,7 @@ export function PanelSettings({
   const [tempEditorMode, setTempEditorMode] = useState<'mode1' | 'mode2'>(editorMode);
   const [tempBackgroundImage, setTempBackgroundImage] = useState<string>(backgroundImage);
   const [tempBackgroundOpacity, setTempBackgroundOpacity] = useState<number>(backgroundOpacity);
+  const [tempTheme, setTempTheme] = useState<AppThemeName>(currentTheme);
   const [showWarningToast, setShowWarningToast] = useState<boolean>(false);
   // 推送设置相关状态
   const [tempEnablePush, setTempEnablePush] = useState<boolean>(enablePush);
@@ -296,6 +302,11 @@ export function PanelSettings({
   useEffect(() => {
     setTempBackgroundOpacity(backgroundOpacity);
   }, [backgroundOpacity]);
+
+  // 当传入的主题变化时，更新临时值
+  useEffect(() => {
+    setTempTheme(currentTheme);
+  }, [currentTheme]);
 
   // 当传入的enablePush变化时，更新临时值
   useEffect(() => {
@@ -647,6 +658,7 @@ export function PanelSettings({
     onEditorModeChange(tempEditorMode);
     if (onBackgroundImageChange) onBackgroundImageChange(tempBackgroundImage);
     if (onBackgroundOpacityChange) onBackgroundOpacityChange(tempBackgroundOpacity);
+    if (onThemeChange) onThemeChange(tempTheme);
     // 保存推送设置
     if (onEnablePushChange) onEnablePushChange(tempEnablePush);
     if (onPushRepoUrlChange) onPushRepoUrlChange(tempPushRepoUrl);
@@ -687,6 +699,7 @@ export function PanelSettings({
       localStorage.setItem('editor-mode', tempEditorMode);
       localStorage.setItem('background-image', tempBackgroundImage);
       localStorage.setItem('background-opacity', tempBackgroundOpacity.toString());
+      localStorage.setItem('app-theme', tempTheme);
       // 保存推送设置
       localStorage.setItem('enable-push', tempEnablePush.toString());
       localStorage.setItem('push-repo-url', tempPushRepoUrl);
@@ -872,6 +885,60 @@ export function PanelSettings({
               {t.previewModeDescription}
             </p>
           </div>
+
+            <div className="space-y-2 rounded-lg border p-4">
+              <Label>{language === 'zh' ? '主题设置' : 'Theme Settings'}</Label>
+              <p className="text-sm text-muted-foreground">
+                {language === 'zh'
+                  ? '选择软件界面主题，保存后会立即应用并在下次启动时自动恢复。'
+                  : 'Choose the app theme. It is applied immediately after saving and restored on next launch.'}
+              </p>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {APP_THEME_OPTIONS.map((theme) => {
+                  const isActiveTheme = tempTheme === theme.name;
+                  return (
+                    <button
+                      key={theme.name}
+                      type="button"
+                      onClick={() => setTempTheme(theme.name)}
+                      className={`rounded-lg border p-3 text-left transition-all hover:-translate-y-0.5 hover:shadow-md ${
+                        isActiveTheme ? 'border-primary bg-primary/10 ring-2 ring-primary/30' : 'border-border bg-background hover:border-primary/50'
+                      }`}
+                    >
+                      <div
+                        className="mb-3 h-14 rounded-md border shadow-inner"
+                        style={{ background: theme.preview.background }}
+                      >
+                        <div className="flex h-full items-center justify-center gap-1 px-3">
+                          <span
+                            className="h-3 w-3 rounded-full"
+                            style={{ backgroundColor: theme.preview.primary }}
+                          />
+                          <span
+                            className="h-2 flex-1 rounded-full opacity-80"
+                            style={{ backgroundColor: theme.preview.foreground }}
+                          />
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium">{theme.label[language]}</span>
+                        {isActiveTheme && (
+                          <span className="rounded-full bg-primary px-2 py-0.5 text-xs text-primary-foreground">
+                            {language === 'zh' ? '当前选择' : 'Selected'}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">{theme.description[language]}</p>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex flex-wrap items-center gap-2 rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">
+                <span>{language === 'zh' ? '当前主题接口值：' : 'Current theme API value: '}</span>
+                <code className="rounded bg-background px-2 py-1 text-foreground">{tempTheme}</code>
+                <span>{language === 'zh' ? `（${getAppThemeOption(tempTheme).label[language]}）` : `(${getAppThemeOption(tempTheme).label[language]})`}</span>
+              </div>
+            </div>
 
             <div className="space-y-2">
               <Label>{t.backgroundSettings}</Label>

@@ -35,6 +35,7 @@ import {
   Languages,
   Sun,
   Moon,
+  Palette,
   Bold,
   Italic,
   Code,
@@ -81,6 +82,16 @@ import { AIAnalysisDialog } from '@/components/ai-analysis-dialog';
 import { getIpcRenderer, isDesktopApp, isTauri } from '@/lib/desktop-api';
 import { commandOperations } from '@/lib/tauri-api';
 import { normalizePath, normalizePathInternal, escapeShellArg } from '@/lib/utils';
+import {
+  AppThemeName,
+  applyAppTheme,
+  getAppThemeOption,
+  getNextAppTheme,
+  getStoredAppTheme,
+  isAppThemeDark,
+  setAppTheme,
+} from '@/lib/theme';
+import { findImageSources, inferImageExtension, replaceImageSources } from '@/lib/extract-images';
 
 interface Post {
   name: string;
@@ -122,6 +133,7 @@ export default function Home() {
   const [isServerRunning, setIsServerRunning] = useState<boolean>(false);
   const [serverProcess, setServerProcess] = useState<any>(null);
   const [language, setLanguage] = useState<Language>('zh');
+  const [currentTheme, setCurrentTheme] = useState<AppThemeName>('system');
   const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
   const [availableTags, setAvailableTags] = useState<string[]>([]);
   const [availableCategories, setAvailableCategories] = useState<string[]>([]);
@@ -190,6 +202,7 @@ export default function Home() {
   const [showAnalysisDialog, setShowAnalysisDialog] = useState<boolean>(false); // 是否显示分析对话框
   const [showDeletePostDialog, setShowDeletePostDialog] = useState<boolean>(false); // 是否显示删除文章确认对话框
   const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]); // Hexo source/images 目录图片
+  const [isExtractingImages, setIsExtractingImages] = useState<boolean>(false); // 图片提取状态
   const [isUploadingImage, setIsUploadingImage] = useState<boolean>(false); // 图片上传状态
   const [isImageDragOver, setIsImageDragOver] = useState<boolean>(false); // 图片管理卡片拖拽状态
   const [imageViewMode, setImageViewMode] = useState<'list' | 'grid'>('grid'); // 图片展示模式
@@ -351,6 +364,25 @@ export default function Home() {
 
 
 
+  // 当主题配置变化时应用主题，并在跟随系统时监听系统主题变化
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const updateAppliedTheme = () => {
+      const appliedTheme = applyAppTheme(currentTheme);
+      setIsDarkMode(isAppThemeDark(appliedTheme));
+    };
+
+    updateAppliedTheme();
+
+    if (currentTheme !== 'system') return;
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    mediaQuery.addEventListener('change', updateAppliedTheme);
+
+    return () => mediaQuery.removeEventListener('change', updateAppliedTheme);
+  }, [currentTheme]);
+
   // 组件加载时，尝试从localStorage加载上次选择的路径和语言设置，并检查更新
   useEffect(() => {
     const loadSavedSettings = async () => {
@@ -374,17 +406,10 @@ export default function Home() {
         }
 
         // 加载主题设置
-        const savedTheme = localStorage.getItem('app-theme');
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        const shouldUseDark = savedTheme === 'dark' || (savedTheme === null && prefersDark);
-        setIsDarkMode(shouldUseDark);
-
-        // 应用主题到document
-        if (shouldUseDark) {
-          document.documentElement.classList.add('dark');
-        } else {
-          document.documentElement.classList.remove('dark');
-        }
+        const savedTheme = getStoredAppTheme();
+        setCurrentTheme(savedTheme);
+        const appliedTheme = applyAppTheme(savedTheme);
+        setIsDarkMode(isAppThemeDark(appliedTheme));
 
         // 加载每页显示文章数量设置
         const savedPostsPerPage = localStorage.getItem('posts-per-page');
@@ -647,22 +672,24 @@ export default function Home() {
     }
   };
 
-  // 切换主题
+  // 应用主题配置
+  const handleThemeChange = (themeName: AppThemeName) => {
+    const appliedTheme = setAppTheme(themeName);
+    setCurrentTheme(themeName);
+    setIsDarkMode(isAppThemeDark(appliedTheme));
+  };
+
+  // 一键切换主题
   const toggleTheme = () => {
-    const newTheme = !isDarkMode;
-    setIsDarkMode(newTheme);
+    const nextTheme = getNextAppTheme(currentTheme);
+    handleThemeChange(nextTheme);
 
-    if (typeof window !== 'undefined') {
-      // 保存主题设置
-      localStorage.setItem('app-theme', newTheme ? 'dark' : 'light');
-
-      // 应用主题到document
-      if (newTheme) {
-        document.documentElement.classList.add('dark');
-      } else {
-        document.documentElement.classList.remove('dark');
-      }
-    }
+    const themeLabel = getAppThemeOption(nextTheme).label[language];
+    toast({
+      title: language === 'zh' ? '主题已切换' : 'Theme switched',
+      description: language === 'zh' ? `当前主题：${themeLabel}` : `Current theme: ${themeLabel}`,
+      variant: 'success',
+    });
   };
 
   // 清除保存的项目路径
@@ -895,6 +922,162 @@ export default function Home() {
     } catch (error) {
       console.warn('加载图片列表失败，可能是 source/images 目录尚未创建:', error);
       setUploadedImages([]);
+    }
+  };
+
+  // 将网络图片写入 source/images（兼容 Electron 与 Tauri）
+  const writeRemoteImageToSourceImages = async (destinationPath: string, bytes: Uint8Array) => {
+    const ipcRenderer = await getIpcRenderer();
+
+    if (isTauri()) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('write_file_from_buffer', {
+        filePath: destinationPath,
+        bytes: Array.from(bytes),
+      });
+      return;
+    }
+
+    await ipcRenderer.invoke('write-file-from-buffer', destinationPath, bytes);
+  };
+
+  // 下载远程图片并返回字节数组
+  const downloadRemoteImage = async (src: string): Promise<{ bytes: Uint8Array; contentType?: string | null }> => {
+    if (isTauri()) {
+      const { fetch: tauriFetch } = await import('@tauri-apps/plugin-http');
+      const response = await tauriFetch(src);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const contentType = response.headers.get('content-type');
+      const blob = await response.blob();
+      const arrayBuffer = await blob.arrayBuffer();
+      return { bytes: new Uint8Array(arrayBuffer), contentType };
+    }
+
+    const response = await fetch(src);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const contentType = response.headers.get('content-type');
+    const arrayBuffer = await response.arrayBuffer();
+    return { bytes: new Uint8Array(arrayBuffer), contentType };
+  };
+
+  // 提取当前文章中的外部图片：下载到 source/images、重命名、关联文章并替换正文引用
+  const handleExtractImages = async () => {
+    if (!isElectron || !hexoPath || !selectedPost) {
+      toast({
+        title: t.failed,
+        description: t.selectValidHexoProject,
+        variant: 'error',
+      });
+      return;
+    }
+
+    const matches = findImageSources(postContent);
+    const remoteMatches = matches.filter((m) => /^https?:\/\//i.test(m.src));
+
+    if (remoteMatches.length === 0) {
+      toast({
+        title: language === 'zh' ? '没有可提取的图片' : 'No images to extract',
+        description: language === 'zh'
+          ? '当前文章中没有发现外部网络图片引用（<img> 或 Markdown 图片语法）'
+          : 'No external image references found in the current post',
+        variant: 'error',
+      });
+      return;
+    }
+
+    if (isExtractingImages) return;
+
+    setIsExtractingImages(true);
+
+    // 文章名（去掉扩展名）作为图片名前缀
+    const postBaseName = selectedPost.name.replace(/\.(md|markdown)$/i, '').trim() || 'post';
+
+    try {
+      const ipcRenderer = await getIpcRenderer();
+      const imagesDirectoryPath = getImagesDirectoryPath(hexoPath);
+      const existingNames = await ipcRenderer
+        .invoke('list-files', imagesDirectoryPath)
+        .then((files: any[]) => files.map((f: any) => f.name))
+        .catch(() => [] as string[]);
+
+      const replacements: Array<{ raw: string; replacement: string }> = [];
+      const downloadedNames: string[] = [];
+      const failedSources: string[] = [];
+
+      for (let index = 0; index < remoteMatches.length; index++) {
+        const match = remoteMatches[index];
+        const sequence = index + 1;
+
+        try {
+          const { bytes, contentType } = await downloadRemoteImage(match.src);
+          const extension = inferImageExtension(match.src, contentType);
+
+          // 生成目标文件名：文章名-序号.扩展名，重名时递增序号
+          let candidateName = `${postBaseName}-${sequence}.${extension}`;
+          let collisionIndex = 1;
+          while (existingNames.includes(candidateName)) {
+            collisionIndex += 1;
+            candidateName = `${postBaseName}-${sequence}-${collisionIndex}.${extension}`;
+          }
+
+          const destinationPath = `${imagesDirectoryPath}/${candidateName}`;
+          await writeRemoteImageToSourceImages(destinationPath, bytes);
+          existingNames.push(candidateName);
+
+          const referenceUrl = getImageReferenceUrl(candidateName);
+          if (match.kind === 'html') {
+            replacements.push({ raw: match.raw, replacement: `![](${referenceUrl})` });
+          } else {
+            replacements.push({ raw: match.raw, replacement: `![图片](${referenceUrl})` });
+          }
+
+          downloadedNames.push(candidateName);
+
+          // 将图片关联到当前文章
+          const nextTags = { ...imageArticleTags };
+          nextTags[candidateName] = postBaseName;
+          persistImageArticleTags(nextTags);
+        } catch (error) {
+          console.error(`提取图片失败 (${match.src}):`, error);
+          failedSources.push(match.src);
+        }
+      }
+
+      if (downloadedNames.length > 0) {
+        // 替换正文中的引用
+        const newContent = replaceImageSources(postContent, replacements);
+        setPostContent(newContent);
+        await ipcRenderer.invoke('write-file', selectedPost.path, newContent);
+
+        await loadImageFiles(hexoPath);
+
+        toast({
+          title: language === 'zh' ? '图片提取完成' : 'Images extracted',
+          description: language === 'zh'
+            ? `已提取 ${downloadedNames.length} 张图片到 source/images${failedSources.length > 0 ? `，${failedSources.length} 张失败` : ''}`
+            : `${downloadedNames.length} image(s) saved to source/images${failedSources.length > 0 ? `, ${failedSources.length} failed` : ''}`,
+          variant: failedSources.length > 0 ? 'default' : 'success',
+        });
+      } else {
+        toast({
+          title: t.failed,
+          description: language === 'zh' ? '图片提取失败，请检查网络或图片地址' : 'Image extraction failed, check network or image URLs',
+          variant: 'error',
+        });
+      }
+    } catch (error) {
+      console.error('图片提取失败:', error);
+      toast({
+        title: t.failed,
+        description: language === 'zh' ? `图片提取失败: ${error instanceof Error ? error.message : String(error)}` : `Extraction failed: ${error instanceof Error ? error.message : String(error)}`,
+        variant: 'error',
+      });
+    } finally {
+      setIsExtractingImages(false);
     }
   };
 
@@ -3554,18 +3737,21 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
                 {language === 'zh' ? 'EN' : '中文'}
               </Button>
 
-              {/* 主题切换按钮 */}
+              {/* 一键主题切换按钮 */}
               <Button
                 variant="outline"
                 size="sm"
                 onClick={toggleTheme}
-                title={isDarkMode ? t.lightMode : t.darkMode}
+                title={language === 'zh' ? '一键切换主题' : 'One-click theme switch'}
               >
                 {isDarkMode ? (
-                  <Sun className="w-4 h-4" />
+                  <Sun className="w-4 h-4 mr-1" />
+                ) : currentTheme === 'system' ? (
+                  <Palette className="w-4 h-4 mr-1" />
                 ) : (
-                  <Moon className="w-4 h-4" />
+                  <Moon className="w-4 h-4 mr-1" />
                 )}
+                <span className="hidden xl:inline">{getAppThemeOption(currentTheme).label[language]}</span>
               </Button>
             </div>
           </div>
@@ -3842,6 +4028,8 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
                 onBackgroundImageChange={setBackgroundImage}
                 backgroundOpacity={backgroundOpacity}
                 onBackgroundOpacityChange={setBackgroundOpacity}
+                currentTheme={currentTheme}
+                onThemeChange={handleThemeChange}
                 language={language}
                 // 推送设置
                 enablePush={enablePush}
@@ -4397,6 +4585,24 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
                           >
                             <ExternalLink className="w-4 h-4 mr-2" />
                             {t.externalEditor}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleExtractImages}
+                            disabled={isLoading || isExtractingImages || !selectedPost || !isElectron}
+                            title={language === 'zh'
+                              ? '提取文章中的外部网络图片到 source/images，并替换为本地引用'
+                              : 'Extract external images in the post to source/images and replace references'}
+                          >
+                            {isExtractingImages ? (
+                              <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                            ) : (
+                              <Download className="w-4 h-4 mr-2" />
+                            )}
+                            {isExtractingImages
+                              ? (language === 'zh' ? '提取中...' : 'Extracting...')
+                              : (language === 'zh' ? '提取图片' : 'Extract Images')}
                           </Button>
                           <Button
                             variant="outline"
@@ -5122,7 +5328,7 @@ ${selectedText}
 
       {/* 图片引用选择对话框 */}
       <Dialog open={showImagePickerDialog} onOpenChange={setShowImagePickerDialog}>
-        <DialogContent className="max-h-[88vh] max-w-[min(96vw,1100px)] overflow-hidden">
+        <DialogContent className="max-h-[92vh] w-full max-w-[min(98vw,1440px)] sm:max-w-[min(98vw,1440px)] overflow-hidden">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Image className="h-5 w-5 text-blue-600" />
@@ -5137,7 +5343,7 @@ ${selectedText}
 
           <Card
             ref={imageManagerDropAreaRef}
-            className={`max-h-[calc(88vh-180px)] overflow-hidden border bg-background transition-colors ${isImageDragOver ? 'border-blue-400 bg-blue-50/70 dark:bg-blue-950/30' : 'border-border'}`}
+            className={`max-h-[calc(92vh-180px)] overflow-hidden border bg-background transition-colors ${isImageDragOver ? 'border-blue-400 bg-blue-50/70 dark:bg-blue-950/30' : 'border-border'}`}
             onDragOver={handleImageDragOver}
             onDragLeave={handleImageDragLeave}
             onDrop={handleImageDrop}
@@ -5172,8 +5378,8 @@ ${selectedText}
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="max-h-[calc(88vh-250px)] space-y-4 overflow-auto pr-4">
-              <div className={`rounded-lg border border-dashed p-4 text-center transition-colors ${isImageDragOver ? 'border-blue-500 bg-blue-100/70 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300' : 'border-muted-foreground/30 bg-muted/20 text-muted-foreground'}`}>
+            <CardContent className="max-h-[calc(92vh-250px)] space-y-4 overflow-auto pr-4">
+              <div className={`rounded-lg border border-dashed p-5 text-center transition-colors ${isImageDragOver ? 'border-blue-500 bg-blue-100/70 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300' : 'border-muted-foreground/30 bg-muted/20 text-muted-foreground'}`}>
                 <Upload className="mx-auto mb-2 h-7 w-7" />
                 <p className="text-sm font-medium">
                   {isImageDragOver
@@ -5202,13 +5408,13 @@ ${selectedText}
               {uploadedImages.length > 0 ? (
                 visibleUploadedImages.length > 0 ? (
                   imageViewMode === 'list' ? (
-                    <div className="max-h-[48vh] overflow-auto rounded-lg border">
+                    <div className="max-h-[52vh] overflow-auto rounded-lg border">
                       {visibleUploadedImages.map((image) => (
                         <div
                           key={image.path}
                           className="flex w-full items-center justify-between gap-3 border-b px-4 py-3 text-left text-sm transition-colors last:border-b-0 hover:bg-muted"
                         >
-                          <span className="flex min-w-[220px] flex-1 items-center gap-2">
+                          <span className="flex min-w-[300px] flex-1 items-center gap-2">
                             <Image className="h-4 w-4 flex-shrink-0 text-blue-600" />
                             <span className="min-w-0 flex-1">
                               <span className="block truncate font-medium">{image.name}</span>
@@ -5256,7 +5462,7 @@ ${selectedText}
                       ))}
                     </div>
                   ) : (
-                    <div className="grid max-h-[48vh] grid-cols-2 gap-4 overflow-auto pr-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                    <div className="grid max-h-[52vh] grid-cols-2 gap-4 overflow-auto pr-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
                       {visibleUploadedImages.map((image) => (
                         <div
                           key={image.path}
@@ -5307,7 +5513,7 @@ ${selectedText}
                   renderNoVisibleUploadedImages()
                 )
               ) : (
-                <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-8 text-center text-muted-foreground">
+                <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-10 text-center text-muted-foreground">
                   <Image className="mb-3 h-10 w-10" />
                   <p className="text-sm">{language === 'zh' ? 'source/images 目录下暂无图片' : 'No images found under source/images'}</p>
                   <p className="mt-1 text-xs">{language === 'zh' ? '请先拖动或上传图片后再引用。' : 'Drag or upload an image before inserting a reference.'}</p>
