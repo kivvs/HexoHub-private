@@ -3192,6 +3192,8 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
       { cmd: `git -C ${escapedHexoPath} remote set-url origin ${escapedRepoUrl}`, log: 'git remote set-url origin', name: '设置远程仓库' },
       { cmd: `git -C ${escapedHexoPath} add .`, log: 'git add .', name: '添加文件' },
       { cmd: `git -C ${escapedHexoPath} commit -m ${escapedCommitMessage}`, log: `git commit -m "${commitMessage}"`, name: '提交更改' },
+      // 主动在推送前拉取远程最新代码（rebase），确保推送总能顺利执行
+      { cmd: `git -C ${escapedHexoPath} pull --rebase origin ${escapedBranch}`, log: `git pull --rebase origin ${pushBranch}`, name: '拉取远程最新代码' },
       { cmd: `git -C ${escapedHexoPath} push -u origin ${escapedBranch}`, log: `git push -u origin ${pushBranch}`, name: '推送到远程' },
     ];
 
@@ -3209,6 +3211,39 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
           r.stderr?.includes('没有要提交的') ||
           r.stdout?.includes('没有要提交的')
         );
+
+        // 容忍 git pull --rebase 的几种非致命场景：
+        // 1) 首次推送，远程还没有该分支（Couldn't find remote ref / 无法找到远程引用）
+        // 2) 本地没有上游分支，git 提示先 push -u（no upstream）
+        // 3) 网络/远程不可达导致拉取失败——此时 push 阶段仍会尝试（若远程真的更新过会被拒，再由下方 non-fast-forward 兜底处理）
+        const combinedPullOutput = (r.stdout || '') + (r.stderr || '');
+        const isPullTolerable = gitStep.log.startsWith('git pull') && (
+          /couldn't find remote ref|could not find remote ref/i.test(combinedPullOutput) ||
+          /no such branch|unknown revision/i.test(combinedPullOutput) ||
+          combinedPullOutput.includes('no upstream') ||
+          combinedPullOutput.includes('has no upstream') ||
+          combinedPullOutput.includes('git pull --set-upstream') ||
+          combinedPullOutput.includes('did not match any file') ||
+          combinedPullOutput.includes('unable to access') ||
+          combinedPullOutput.includes('Could not resolve host') ||
+          combinedPullOutput.includes('Connection refused') ||
+          combinedPullOutput.includes('过早的文件结束') ||
+          combinedPullOutput.includes('early EOF')
+        );
+        if (isPullTolerable) {
+          // 非致命：跳过拉取，交由 push 阶段处理（有冲突会被 non-fast-forward 兜底）
+          continue;
+        }
+        // pull --rebase 因冲突而失败：abort 恢复，并给出明确错误
+        if (gitStep.log.startsWith('git pull')) {
+          const abortResult = await ipcRenderer.invoke('execute-command', `git -C ${escapedHexoPath} rebase --abort`);
+          logs.push({ ...abortResult, timestamp: new Date().toLocaleString(), command: 'git rebase --abort' });
+          return {
+            success: false,
+            error: `[拉取远程最新代码] 远程与本地存在冲突，已中止合并（git rebase --abort）。请先手动解决冲突或核对远程仓库后重试。详情: ${r.stderr || r.error || 'unknown error'}`,
+            logs,
+          };
+        }
 
         // git push 即使 success: false，也可能实际推送成功（PowerShell stderr 误判）
         // 检测成功标志：输出包含 "分支名 -> 分支名" 或 "Everything up-to-date"
