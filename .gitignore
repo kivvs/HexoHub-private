@@ -20,6 +20,17 @@
 # production
 /build
 /dist
+/dist-electron
+/dist-build
+/clean-win-unpacked.err
+/clean-win-unpacked.result
+/clean-dist.err
+/clean-dist.result
+/electron-build-admin.log
+/scripts/build-electron-admin.bat
+/scripts/build-electron-dist2.bat
+/scripts/clean-dist.bat
+/scripts/clean-win-unpacked.bat
 
 # misc
 .DS_Store

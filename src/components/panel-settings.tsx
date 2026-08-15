@@ -1,21 +1,93 @@
 
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type CSSProperties } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Settings, Save, Loader2, HelpCircle, Eye, EyeOff, Copy, Check } from 'lucide-react';
+import { Settings, Save, Loader2, HelpCircle, Eye, EyeOff, Copy, Check, Download, Upload } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { UpdateChecker } from '@/components/update-checker';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { getTexts } from '@/utils/i18n';
 import { isDesktopApp, getIpcRenderer, isTauri } from '@/lib/desktop-api';
+import { importSharedPanelSettings, saveSharedPanelSettings } from '@/lib/panel-settings-sync';
 import { openExternalLink, getAppVersion, buildAiApiUrl, localizeApiError } from '@/lib/utils';
 import { copySystemInfo } from '@/lib/system-info';
+import { writeClipboardText } from '@/lib/clipboard';
 import { AppThemeName, APP_THEME_OPTIONS, getAppThemeOption } from '@/lib/theme';
+
+interface SettingValueFieldProps {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  defaultHidden?: boolean;
+  rows?: number;
+  className?: string;
+  language: 'zh' | 'en';
+}
+
+/** 面板文本配置统一控件：显示/隐藏、复制、垂直拖动调整高度。 */
+function SettingValueField({
+  id,
+  value,
+  onChange,
+  placeholder,
+  defaultHidden = false,
+  rows = 1,
+  className = '',
+  language,
+}: SettingValueFieldProps) {
+  const [visible, setVisible] = useState(!defaultHidden);
+  const [copied, setCopied] = useState(false);
+  const hiddenStyle = !visible
+    ? ({ WebkitTextSecurity: 'disc' } as CSSProperties)
+    : undefined;
+
+  const copyValue = async () => {
+    if (!value) return;
+    await writeClipboardText(value);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
+
+  return (
+    <div className={`relative w-full ${className}`}>
+      <Textarea
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        rows={rows}
+        spellCheck={false}
+        style={hiddenStyle}
+        className="min-h-10 w-full resize-y pr-20"
+      />
+      <div className="absolute right-1 top-1 flex items-center rounded bg-background/80 backdrop-blur-sm">
+        <button
+          type="button"
+          onClick={() => setVisible((current) => !current)}
+          className="p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+          title={language === 'zh' ? (visible ? '隐藏内容' : '显示内容') : (visible ? 'Hide value' : 'Show value')}
+        >
+          {visible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+        </button>
+        <button
+          type="button"
+          onClick={copyValue}
+          disabled={!value}
+          className="p-1.5 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+          title={language === 'zh' ? '复制内容' : 'Copy value'}
+        >
+          {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 interface PanelSettingsProps {
   postsPerPage: number;
@@ -262,8 +334,6 @@ export function PanelSettings({
   const [isTesting, setIsTesting] = useState<boolean>(false);
   const [testErrorDetail, setTestErrorDetail] = useState<string>(''); // 测试连接失败的完整错误信息
   const [copiedError, setCopiedError] = useState<boolean>(false);
-  const [showApiKey, setShowApiKey] = useState<boolean>(false); // API Key 可见/隐藏切换
-  const [copiedApiKey, setCopiedApiKey] = useState<boolean>(false); // API Key 复制成功反馈
   const { toast } = useToast();
 
   // 获取应用版本号
@@ -634,7 +704,7 @@ export function PanelSettings({
   };
 
   // 保存设置
-  const saveSettings = () => {
+  const saveSettings = async () => {
     if (tempPostsPerPage < 1 || tempPostsPerPage > 100) {
       toast({
         title: t.error,
@@ -732,6 +802,8 @@ export function PanelSettings({
       localStorage.setItem('preview-mode', tempPreviewMode);
       // 保存iframe地址获取方式设置
       localStorage.setItem('iframe-url-mode', tempIframeUrlMode);
+      // 同步到 Electron/Tauri 共用设置文件，两个版本后续启动均读取同一份配置
+      await saveSharedPanelSettings();
     }
 
     toast({
@@ -739,6 +811,45 @@ export function PanelSettings({
       description: t.settingsSaved,
       variant: 'success',
     });
+  };
+
+  const exportSettingsForOtherDesktopVersion = async () => {
+    const success = await saveSharedPanelSettings();
+    toast({
+      title: success ? t.success : t.error,
+      description: success
+        ? (language === 'zh' ? '面板设置已导出，Electron 与 Tauri 均可读取' : 'Panel settings exported for Electron and Tauri')
+        : (language === 'zh' ? '导出共享设置失败' : 'Failed to export shared settings'),
+      variant: success ? 'success' : 'error',
+    });
+  };
+
+  const importSettingsFromOtherDesktopVersion = async () => {
+    try {
+      const imported = await importSharedPanelSettings();
+      if (imported <= 0) {
+        toast({
+          title: t.error,
+          description: language === 'zh' ? '没有找到另一版本导出的共享设置' : 'No shared settings export was found',
+          variant: 'error',
+        });
+        return;
+      }
+      toast({
+        title: t.success,
+        description: language === 'zh'
+          ? `已导入 ${imported} 项面板设置，正在重新加载应用`
+          : `Imported ${imported} panel settings; reloading`,
+        variant: 'success',
+      });
+      setTimeout(() => window.location.reload(), 350);
+    } catch (error) {
+      toast({
+        title: t.error,
+        description: `${language === 'zh' ? '导入共享设置失败' : 'Failed to import shared settings'}: ${error instanceof Error ? error.message : String(error)}`,
+        variant: 'error',
+      });
+    }
   };
 
   return (
@@ -946,12 +1057,12 @@ export function PanelSettings({
                 <div className="space-y-2">
                   <Label htmlFor="backgroundImage">{t.backgroundImageUrl}</Label>
                   <div className="flex space-x-2">
-                    <Input
+                    <SettingValueField
                       id="backgroundImage"
-                      type="text"
                       value={tempBackgroundImage}
-                      onChange={(e) => setTempBackgroundImage(e.target.value)}
+                      onChange={setTempBackgroundImage}
                       placeholder={t.backgroundImageDescription}
+                      language={language}
                       className="flex-1"
                     />
                     <Button
@@ -1037,13 +1148,12 @@ export function PanelSettings({
 
                 <div className="space-y-2">
                   <Label htmlFor="imageBaseUrl">{t.imageBaseUrl}</Label>
-                  <Input
+                  <SettingValueField
                     id="imageBaseUrl"
-                    type="text"
                     value={tempImageBaseUrl}
-                    onChange={(e) => setTempImageBaseUrl(e.target.value)}
+                    onChange={setTempImageBaseUrl}
                     placeholder={t.imageBaseUrlPlaceholder}
-                    className={`w-full ${isDarkMode ? 'border-slate-700 bg-slate-900 text-slate-100 placeholder:text-slate-500' : 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400'}`}
+                    language={language}
                   />
                   <p className="text-sm text-muted-foreground">
                     {t.imageBaseUrlDescription}
@@ -1065,13 +1175,12 @@ export function PanelSettings({
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="giscusRepo">{language === 'zh' ? 'Giscus 仓库' : 'Giscus Repository'}</Label>
-                  <Input
+                  <SettingValueField
                     id="giscusRepo"
-                    type="text"
                     value={tempGiscusRepo}
-                    onChange={(e) => setTempGiscusRepo(e.target.value)}
+                    onChange={setTempGiscusRepo}
                     placeholder="owner/repo"
-                    className="w-full"
+                    language={language}
                   />
                   <p className="text-sm text-muted-foreground">
                     {language === 'zh' ? '填写启用 Discussions 的 GitHub 仓库，例如 owner/repo。' : 'GitHub repository with Discussions enabled, e.g. owner/repo.'}
@@ -1080,13 +1189,12 @@ export function PanelSettings({
 
                 <div className="space-y-2">
                   <Label htmlFor="giscusCategory">{language === 'zh' ? 'Giscus 分类' : 'Giscus Category'}</Label>
-                  <Input
+                  <SettingValueField
                     id="giscusCategory"
-                    type="text"
                     value={tempGiscusCategory}
-                    onChange={(e) => setTempGiscusCategory(e.target.value)}
+                    onChange={setTempGiscusCategory}
                     placeholder={language === 'zh' ? '可选，例如 Announcements' : 'Optional, e.g. Announcements'}
-                    className="w-full"
+                    language={language}
                   />
                   <p className="text-sm text-muted-foreground">
                     {language === 'zh' ? '留空时统计仓库内所有 Discussions。' : 'Leave empty to count all Discussions in the repository.'}
@@ -1096,26 +1204,25 @@ export function PanelSettings({
 
               <div className="space-y-2">
                 <Label htmlFor="giscusToken">GitHub Token</Label>
-                <Input
+                <SettingValueField
                   id="giscusToken"
-                  type="password"
                   value={tempGiscusToken}
-                  onChange={(e) => setTempGiscusToken(e.target.value)}
+                  onChange={setTempGiscusToken}
                   placeholder={language === 'zh' ? '需要 Discussions 读取权限' : 'Needs Discussions read permission'}
-                  className="w-full"
+                  language={language}
+                  defaultHidden
                 />
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="ga4PropertyId">GA4 Property ID</Label>
-                  <Input
+                  <SettingValueField
                     id="ga4PropertyId"
-                    type="text"
                     value={tempGa4PropertyId}
-                    onChange={(e) => setTempGa4PropertyId(e.target.value)}
+                    onChange={setTempGa4PropertyId}
                     placeholder="123456789"
-                    className="w-full"
+                    language={language}
                   />
                   <p className="text-sm text-muted-foreground">
                     {language === 'zh' ? '只填写数字 ID，也兼容 properties/123456789。' : 'Use the numeric ID; properties/123456789 also works.'}
@@ -1124,12 +1231,15 @@ export function PanelSettings({
 
                 <div className="space-y-2">
                   <Label htmlFor="ga4ServiceAccountJson">{language === 'zh' ? 'GA4 服务账号 JSON' : 'GA4 Service Account JSON'}</Label>
-                  <Textarea
+                  <SettingValueField
                     id="ga4ServiceAccountJson"
                     value={tempGa4ServiceAccountJson}
-                    onChange={(e) => setTempGa4ServiceAccountJson(e.target.value)}
+                    onChange={setTempGa4ServiceAccountJson}
                     placeholder={language === 'zh' ? '粘贴 Google Cloud 服务账号 JSON' : 'Paste Google Cloud service account JSON'}
-                    className="min-h-28 w-full font-mono text-xs"
+                    language={language}
+                    defaultHidden
+                    rows={5}
+                    className="font-mono text-xs"
                   />
                   <p className="text-sm text-muted-foreground">
                     {language === 'zh' ? '服务账号邮箱需要添加到 GA4 属性访问管理中，授予查看者权限。' : 'Add the service account email to GA4 property access management as a Viewer.'}
@@ -1158,49 +1268,48 @@ export function PanelSettings({
                 <div className="mt-4 space-y-4 pl-6 border-l-2 border-gray-200">
                   <div className="space-y-2">
                     <Label htmlFor="pushRepoUrl">{t.pushRepoUrl || '仓库地址'}</Label>
-                    <Input
+                    <SettingValueField
                       id="pushRepoUrl"
-                      type="text"
                       value={tempPushRepoUrl}
-                      onChange={(e) => setTempPushRepoUrl(e.target.value)}
+                      onChange={setTempPushRepoUrl}
                       placeholder={t.pushRepoUrlPlaceholder || '例如: https://github.com/username/repo.git'}
-                      className="w-full"
+                      language={language}
+                      defaultHidden
                     />
                   </div>
 
                   <div className="space-y-2">
                     <Label htmlFor="pushBranch">{t.pushBranch || '分支名称'}</Label>
-                    <Input
+                    <SettingValueField
                       id="pushBranch"
-                      type="text"
                       value={tempPushBranch}
-                      onChange={(e) => setTempPushBranch(e.target.value)}
+                      onChange={setTempPushBranch}
                       placeholder={t.pushBranchPlaceholder || '例如: main'}
-                      className="w-full"
+                      language={language}
                     />
                   </div>
 
                   <div className="space-y-2">
                     <Label htmlFor="pushUsername">{t.pushUsername || '用户名'}</Label>
-                    <Input
+                    <SettingValueField
                       id="pushUsername"
-                      type="text"
                       value={tempPushUsername}
-                      onChange={(e) => setTempPushUsername(e.target.value)}
+                      onChange={setTempPushUsername}
                       placeholder={t.pushUsernamePlaceholder || 'Git用户名'}
-                      className="w-full"
+                      language={language}
+                      defaultHidden
                     />
                   </div>
 
                   <div className="space-y-2">
                     <Label htmlFor="pushEmail">{t.pushEmail || '邮箱'}</Label>
-                    <Input
+                    <SettingValueField
                       id="pushEmail"
-                      type="email"
                       value={tempPushEmail}
-                      onChange={(e) => setTempPushEmail(e.target.value)}
+                      onChange={setTempPushEmail}
                       placeholder={t.pushEmailPlaceholder || 'Git邮箱'}
-                      className="w-full"
+                      language={language}
+                      defaultHidden
                     />
                   </div>
                 </div>
@@ -1227,49 +1336,45 @@ export function PanelSettings({
                 <div className="mt-4 space-y-4 pl-6 border-l-2 border-gray-200">
                   <div className="space-y-2">
                     <Label htmlFor="customCleanCommand">{t.customCleanCommand || '清理指令'}</Label>
-                    <Input
+                    <SettingValueField
                       id="customCleanCommand"
-                      type="text"
                       value={tempCustomCleanCommand}
-                      onChange={(e) => setTempCustomCleanCommand(e.target.value)}
+                      onChange={setTempCustomCleanCommand}
                       placeholder={t.customCleanCommandPlaceholder || '例如: hexo clean'}
-                      className="w-full"
+                      language={language}
                     />
                   </div>
 
                   <div className="space-y-2">
                     <Label htmlFor="customGenerateCommand">{t.customGenerateCommand || '生成指令'}</Label>
-                    <Input
+                    <SettingValueField
                       id="customGenerateCommand"
-                      type="text"
                       value={tempCustomGenerateCommand}
-                      onChange={(e) => setTempCustomGenerateCommand(e.target.value)}
+                      onChange={setTempCustomGenerateCommand}
                       placeholder={t.customGenerateCommandPlaceholder || '例如: hexo generate'}
-                      className="w-full"
+                      language={language}
                     />
                   </div>
 
                   <div className="space-y-2">
                     <Label htmlFor="customServerCommand">{t.customServerCommand || '启动服务器指令'}</Label>
-                    <Input
+                    <SettingValueField
                       id="customServerCommand"
-                      type="text"
                       value={tempCustomServerCommand}
-                      onChange={(e) => setTempCustomServerCommand(e.target.value)}
+                      onChange={setTempCustomServerCommand}
                       placeholder={t.customServerCommandPlaceholder || '例如: hexo server'}
-                      className="w-full"
+                      language={language}
                     />
                   </div>
 
                   <div className="space-y-2">
                     <Label htmlFor="customDeployCommand">{t.customDeployCommand || '部署指令'}</Label>
-                    <Input
+                    <SettingValueField
                       id="customDeployCommand"
-                      type="text"
                       value={tempCustomDeployCommand}
-                      onChange={(e) => setTempCustomDeployCommand(e.target.value)}
+                      onChange={setTempCustomDeployCommand}
                       placeholder={t.customDeployCommandPlaceholder || '例如: hexo deploy'}
-                      className="w-full"
+                      language={language}
                     />
                   </div>
                 </div>
@@ -1391,60 +1496,15 @@ export function PanelSettings({
                 <div className="space-y-2">
                   <Label htmlFor="apiKey">{t.apiKey}</Label>
                   <div className="flex space-x-2">
-                    <div className="relative flex-1">
-                      <Input
-                        id="apiKey"
-                        type={showApiKey ? 'text' : 'password'}
-                        value={tempApiKey}
-                        onChange={(e) => setTempApiKey(e.target.value)}
-                        placeholder={t.apiKeyPlaceholder}
-                        className="flex-1 pr-20"
-                      />
-                      <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center">
-                        <button
-                          type="button"
-                          onClick={() => setShowApiKey(!showApiKey)}
-                          className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                          title={language === 'zh' ? (showApiKey ? '隐藏' : '显示') : (showApiKey ? 'Hide' : 'Show')}
-                        >
-                          {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            if (!tempApiKey) return;
-                            try {
-                              await navigator.clipboard.writeText(tempApiKey);
-                              setCopiedApiKey(true);
-                              setTimeout(() => setCopiedApiKey(false), 2000);
-                            } catch {
-                              // Fallback for environments without clipboard API
-                              const textarea = document.createElement('textarea');
-                              textarea.value = tempApiKey;
-                              document.body.appendChild(textarea);
-                              textarea.select();
-                              try {
-                                document.execCommand('copy');
-                                setCopiedApiKey(true);
-                                setTimeout(() => setCopiedApiKey(false), 2000);
-                              } catch {
-                                toast({
-                                  title: t.error,
-                                  description: language === 'zh' ? '复制失败' : 'Copy failed',
-                                  variant: 'error',
-                                });
-                              }
-                              document.body.removeChild(textarea);
-                            }
-                          }}
-                          className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                          title={language === 'zh' ? '复制密钥' : 'Copy key'}
-                          disabled={!tempApiKey}
-                        >
-                          {copiedApiKey ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
-                        </button>
-                      </div>
-                    </div>
+                    <SettingValueField
+                      id="apiKey"
+                      value={tempApiKey}
+                      onChange={setTempApiKey}
+                      placeholder={t.apiKeyPlaceholder}
+                      language={language}
+                      defaultHidden
+                      className="flex-1"
+                    />
                     <Button
                       variant="outline"
                       size="sm"
@@ -1554,13 +1614,12 @@ export function PanelSettings({
                           ))}
                         </select>
                       ) : (
-                        <Input
+                        <SettingValueField
                           id="siliconflowModel"
-                          type="text"
                           value={tempOpenaiModel}
-                          onChange={(e) => setTempOpenaiModel(e.target.value)}
+                          onChange={setTempOpenaiModel}
                           placeholder={t.siliconflowModelPlaceholder}
-                          className="w-full"
+                          language={language}
                         />
                       )}
                       <p className="text-sm text-muted-foreground">
@@ -1574,25 +1633,24 @@ export function PanelSettings({
                   <>
                     <div className="space-y-2">
                       <Label htmlFor="openaiModel">{t.openaiModel}</Label>
-                      <Input
+                      <SettingValueField
                         id="openaiModel"
-                        type="text"
                         value={tempOpenaiModel}
-                        onChange={(e) => setTempOpenaiModel(e.target.value)}
+                        onChange={setTempOpenaiModel}
                         placeholder={t.openaiModelPlaceholder}
-                        className="w-full"
+                        language={language}
                       />
                     </div>
 
                     <div className="space-y-2">
                       <Label htmlFor="openaiApiEndpoint">{t.openaiApiEndpoint}</Label>
-                      <Input
+                      <SettingValueField
                         id="openaiApiEndpoint"
-                        type="text"
                         value={tempOpenaiApiEndpoint}
-                        onChange={(e) => setTempOpenaiApiEndpoint(e.target.value)}
+                        onChange={setTempOpenaiApiEndpoint}
                         placeholder={t.openaiApiEndpointPlaceholder}
-                        className="w-full"
+                        language={language}
+                        defaultHidden
                       />
                       <p className="text-sm text-muted-foreground">
                         {language === 'zh'
@@ -1610,13 +1668,12 @@ export function PanelSettings({
 
                     <div className="space-y-2">
                       <Label htmlFor="openaiApiPath">{t.openaiApiPath}</Label>
-                      <Input
+                      <SettingValueField
                         id="openaiApiPath"
-                        type="text"
                         value={tempOpenaiApiPath}
-                        onChange={(e) => setTempOpenaiApiPath(e.target.value)}
+                        onChange={setTempOpenaiApiPath}
                         placeholder={t.openaiApiPathPlaceholder}
-                        className="w-full"
+                        language={language}
                       />
                       <p className="text-sm text-muted-foreground">
                         {t.openaiApiPathDescription}
@@ -1643,24 +1700,24 @@ export function PanelSettings({
 
                 <div className="space-y-2">
                   <Label htmlFor="prompt">{t.prompt}</Label>
-                  <Textarea
+                  <SettingValueField
                     id="prompt"
                     value={tempPrompt}
-                    onChange={(e) => setTempPrompt(e.target.value)}
+                    onChange={setTempPrompt}
                     placeholder={t.promptPlaceholder}
-                    className="w-full"
+                    language={language}
                     rows={4}
                   />
                 </div>
 
                 <div className="space-y-2">
                   <Label htmlFor="analysisPrompt">{t.analysisPrompt}</Label>
-                  <Textarea
+                  <SettingValueField
                     id="analysisPrompt"
                     value={tempAnalysisPrompt}
-                    onChange={(e) => setTempAnalysisPrompt(e.target.value)}
+                    onChange={setTempAnalysisPrompt}
                     placeholder={t.analysisPromptPlaceholder}
-                    className="w-full"
+                    language={language}
                     rows={4}
                   />
                   <p className="text-sm text-muted-foreground">
@@ -1676,7 +1733,15 @@ export function PanelSettings({
 
 
 
-          <div className="flex justify-end">
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" variant="outline" onClick={exportSettingsForOtherDesktopVersion}>
+              <Upload className="mr-2 h-4 w-4" />
+              {language === 'zh' ? '导出到另一版本' : 'Export to Other Version'}
+            </Button>
+            <Button type="button" variant="outline" onClick={importSettingsFromOtherDesktopVersion}>
+              <Download className="mr-2 h-4 w-4" />
+              {language === 'zh' ? '从另一版本导入' : 'Import from Other Version'}
+            </Button>
             <Button onClick={saveSettings}>
               <Save className="w-4 h-4 mr-2" />
               {t.saveSettings}

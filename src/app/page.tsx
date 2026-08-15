@@ -87,6 +87,7 @@ import { AIAnalysisDialog } from '@/components/ai-analysis-dialog';
 import { AIDiagnosticDialog } from '@/components/ai-diagnostic-dialog';
 import { getIpcRenderer, isDesktopApp, isTauri } from '@/lib/desktop-api';
 import { commandOperations } from '@/lib/tauri-api';
+import { hydrateSharedPanelSettings } from '@/lib/panel-settings-sync';
 import { normalizePath, normalizePathInternal, escapeShellArg } from '@/lib/utils';
 import {
   AppThemeName,
@@ -473,6 +474,10 @@ export default function Home() {
   // 组件加载时，尝试从localStorage加载上次选择的路径和语言设置，并检查更新
   useEffect(() => {
     const loadSavedSettings = async () => {
+      // 先从跨 Electron/Tauri 共享设置文件导入，再读取 localStorage。
+      // 旧版本首次升级时会自动以当前 localStorage 建立共享快照。
+      await hydrateSharedPanelSettings();
+
       // 从localStorage加载自动更新设置
       if (typeof window !== 'undefined') {
         const savedAutoCheckUpdates = localStorage.getItem('auto-check-updates');
@@ -3186,140 +3191,194 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
     const commitMessage = `${t.commitMessagePrefix} - ${new Date().toLocaleString()}`;
     const escapedCommitMessage = escapeShellArg(commitMessage);
 
-    const gitSteps = [
+    // 组装步骤：基础配置 → 子模块提交 → 主仓库 add/commit → 推送
+    // 注意：每个步骤单独执行一条命令（不使用 && / ; 串联，避免 Windows PowerShell 5.1
+    // 不支持 &&、cmd 不支持 ; 导致的跨平台兼容问题）
+    const steps: Array<{ cmd: string; log: string; name: string; tolerable?: (output: string) => boolean }> = [
       { cmd: `git -C ${escapedHexoPath} config user.name ${escapedUsername}`, log: 'git config user.name', name: '配置用户名' },
       { cmd: `git -C ${escapedHexoPath} config user.email ${escapedEmail}`, log: 'git config user.email', name: '配置邮箱' },
       { cmd: `git -C ${escapedHexoPath} remote set-url origin ${escapedRepoUrl}`, log: 'git remote set-url origin', name: '设置远程仓库' },
-      { cmd: `git -C ${escapedHexoPath} add .`, log: 'git add .', name: '添加文件' },
-      { cmd: `git -C ${escapedHexoPath} commit -m ${escapedCommitMessage}`, log: `git commit -m "${commitMessage}"`, name: '提交更改' },
-      // 主动在推送前拉取远程最新代码（rebase），确保推送总能顺利执行
-      { cmd: `git -C ${escapedHexoPath} pull --rebase origin ${escapedBranch}`, log: `git pull --rebase origin ${pushBranch}`, name: '拉取远程最新代码' },
-      { cmd: `git -C ${escapedHexoPath} push -u origin ${escapedBranch}`, log: `git push -u origin ${pushBranch}`, name: '推送到远程' },
     ];
 
-    for (const gitStep of gitSteps) {
-      const r = await ipcRenderer.invoke('execute-command', gitStep.cmd);
-      logs.push({ ...r, timestamp: new Date().toLocaleString(), command: gitStep.log });
+    // 修复旧版主题下载产生的“伪子模块”：themes/ 路径在索引中是 160000 GitLink，
+    // 但仓库没有 .gitmodules，导致 git submodule status / git add / commit 异常。
+    // 将它们自动转换成普通文件目录，之后主题可正常随博客源码推送。
+    const gitLinksResult = await ipcRenderer.invoke('execute-command', `git -C ${escapedHexoPath} ls-files --stage`);
+    logs.push({ ...gitLinksResult, timestamp: new Date().toLocaleString(), command: 'git ls-files --stage' });
+    const gitLinkLines = (gitLinksResult.stdout || '').split('\n');
+    for (const line of gitLinkLines) {
+      const match = line.match(/^160000\s+[0-9a-f]+\s+\d+\t(.+)$/i);
+      if (!match) continue;
+      const gitLinkPath = match[1].trim();
+      if (!gitLinkPath.startsWith('themes/')) continue;
 
-      if (!r.success) {
-        // 容忍 git commit 无改动：英文 "nothing to commit" 或中文 "无文件要提交" / "没有要提交的内容"
-        const isCommitNothingToCommit = gitStep.log.startsWith('git commit') && (
-          r.stderr?.includes('nothing to commit') ||
-          r.stdout?.includes('nothing to commit') ||
-          r.stderr?.includes('无文件要提交') ||
-          r.stdout?.includes('无文件要提交') ||
-          r.stderr?.includes('没有要提交的') ||
-          r.stdout?.includes('没有要提交的')
-        );
+      const absoluteThemePath = normalizePathInternal(`${hexoPath}/${gitLinkPath}`);
+      await ipcRenderer.invoke('remove-directory', `${absoluteThemePath}/.git`).catch(() => undefined);
+      const escapedGitLinkPath = escapeShellArg(gitLinkPath);
 
-        // 容忍 git pull --rebase 的几种非致命场景：
-        // 1) 首次推送，远程还没有该分支（Couldn't find remote ref / 无法找到远程引用）
-        // 2) 本地没有上游分支，git 提示先 push -u（no upstream）
-        // 3) 网络/远程不可达导致拉取失败——此时 push 阶段仍会尝试（若远程真的更新过会被拒，再由下方 non-fast-forward 兜底处理）
-        const combinedPullOutput = (r.stdout || '') + (r.stderr || '');
-        const isPullTolerable = gitStep.log.startsWith('git pull') && (
-          /couldn't find remote ref|could not find remote ref/i.test(combinedPullOutput) ||
-          /no such branch|unknown revision/i.test(combinedPullOutput) ||
-          combinedPullOutput.includes('no upstream') ||
-          combinedPullOutput.includes('has no upstream') ||
-          combinedPullOutput.includes('git pull --set-upstream') ||
-          combinedPullOutput.includes('did not match any file') ||
-          combinedPullOutput.includes('unable to access') ||
-          combinedPullOutput.includes('Could not resolve host') ||
-          combinedPullOutput.includes('Connection refused') ||
-          combinedPullOutput.includes('过早的文件结束') ||
-          combinedPullOutput.includes('early EOF')
-        );
-        if (isPullTolerable) {
-          // 非致命：跳过拉取，交由 push 阶段处理（有冲突会被 non-fast-forward 兜底）
-          continue;
-        }
-        // pull --rebase 因冲突而失败：abort 恢复，并给出明确错误
-        if (gitStep.log.startsWith('git pull')) {
-          const abortResult = await ipcRenderer.invoke('execute-command', `git -C ${escapedHexoPath} rebase --abort`);
-          logs.push({ ...abortResult, timestamp: new Date().toLocaleString(), command: 'git rebase --abort' });
-          return {
-            success: false,
-            error: `[拉取远程最新代码] 远程与本地存在冲突，已中止合并（git rebase --abort）。请先手动解决冲突或核对远程仓库后重试。详情: ${r.stderr || r.error || 'unknown error'}`,
-            logs,
-          };
-        }
+      const untrackResult = await ipcRenderer.invoke(
+        'execute-command',
+        `git -C ${escapedHexoPath} rm --cached --ignore-unmatch -- ${escapedGitLinkPath}`
+      );
+      logs.push({ ...untrackResult, timestamp: new Date().toLocaleString(), command: `git rm --cached ${gitLinkPath}` });
+      if (!untrackResult.success) {
+        return { success: false, error: `[修复主题仓库状态] ${untrackResult.stderr || untrackResult.error || 'unknown error'}`, logs };
+      }
 
-        // git push 即使 success: false，也可能实际推送成功（PowerShell stderr 误判）
-        // 检测成功标志：输出包含 "分支名 -> 分支名" 或 "Everything up-to-date"
-        const combinedOutput = (r.stdout || '') + (r.stderr || '');
-        const isPushActuallySuccess = gitStep.log.startsWith('git push') && (
-          combinedOutput.includes('->') ||                    // 如 "main -> main"
-          combinedOutput.includes('Everything up-to-date') ||
-          combinedOutput.includes('已是最新') ||
-          combinedOutput.includes('set up to track')
-        );
-
-        if (isCommitNothingToCommit || isPushActuallySuccess) {
-          // 非致命情况，继续执行下一步
-          continue;
-        }
-
-        // git push 因远程有新提交被拒绝（non-fast-forward）
-        // 场景：一键发布中 hexo deploy 已推送 .deploy_git 到远程，源仓库 push 时冲突
-        // 修复：自动 git pull --rebase 后重试 push 一次
-        const isPushNonFastForward = gitStep.log.startsWith('git push') && (
-          combinedOutput.includes('fetch first') ||
-          combinedOutput.includes('rejected') ||
-          combinedOutput.includes('non-fast-forward') ||
-          combinedOutput.includes('强制更新')
-        );
-
-        if (isPushNonFastForward) {
-          // 步骤 1: git pull --rebase origin <branch>
-          const pullCmd = `git -C ${escapedHexoPath} pull --rebase origin ${escapedBranch}`;
-          const pullResult = await ipcRenderer.invoke('execute-command', pullCmd);
-          logs.push({ ...pullResult, timestamp: new Date().toLocaleString(), command: `git pull --rebase origin ${pushBranch}` });
-
-          if (pullResult.success) {
-            // 步骤 2: 重试 git push
-            const retryResult = await ipcRenderer.invoke('execute-command', gitStep.cmd);
-            logs.push({ ...retryResult, timestamp: new Date().toLocaleString(), command: `${gitStep.log} (重试)` });
-
-            if (retryResult.success) {
-              continue;  // 重试成功，继续（已是最后一步，循环结束）
-            }
-
-            // 重试仍失败，检测是否实际成功
-            const retryCombined = (retryResult.stdout || '') + (retryResult.stderr || '');
-            const retryActuallySuccess = retryCombined.includes('->') ||
-              retryCombined.includes('Everything up-to-date') ||
-              retryCombined.includes('已是最新');
-
-            if (retryActuallySuccess) {
-              continue;
-            }
-
-            return {
-              success: false,
-              error: `[${gitStep.name}] pull --rebase 后重试仍失败: ${retryResult.stderr || retryResult.error || 'unknown error'}`,
-              logs,
-            };
-          }
-
-          // pull --rebase 失败（可能有冲突），返回错误
-          return {
-            success: false,
-            error: `[${gitStep.name}] 远程有新提交，git pull --rebase 失败: ${pullResult.stderr || pullResult.error || '可能存在冲突，请手动解决'}`,
-            logs,
-          };
-        }
-
-        // 真正失败，返回包含步骤名的错误信息
-        return {
-          success: false,
-          error: `[${gitStep.name}] ${r.stderr || r.error || 'unknown error'}`,
-          logs,
-        };
+      const addThemeResult = await ipcRenderer.invoke(
+        'execute-command',
+        `git -C ${escapedHexoPath} add -- ${escapedGitLinkPath}`
+      );
+      logs.push({ ...addThemeResult, timestamp: new Date().toLocaleString(), command: `git add ${gitLinkPath}` });
+      if (!addThemeResult.success) {
+        return { success: false, error: `[修复主题仓库状态] ${addThemeResult.stderr || addThemeResult.error || 'unknown error'}`, logs };
       }
     }
 
-    return { success: true, logs };
+    // 处理真正配置在 .gitmodules 中的子模块；伪子模块已在上方转换为普通目录。
+    const subStatusR = await ipcRenderer.invoke('execute-command', `git -C ${escapedHexoPath} submodule status`);
+    logs.push({ ...subStatusR, timestamp: new Date().toLocaleString(), command: 'git submodule status' });
+
+    const subStatusOutput = (subStatusR.stdout || '') + (subStatusR.stderr || '');
+    // 每行格式：[标志][40位hash] 路径 (描述)
+    // 标志：- 未初始化 / + 已检出但 HEAD 与索引不一致 / U 合并冲突 / 空格 已检出且一致
+    const submoduleLines = subStatusOutput.split('\n')
+      .map((l) => l.trim())
+      .filter((l) => /^[ +U-]?\s*[0-9a-f]{40,}\s/.test(l));
+
+    for (const line of submoduleLines) {
+      // 未初始化（目录不存在）或合并冲突的子模块跳过
+      if (line.startsWith('-') || line.startsWith('U')) continue;
+
+      const m = line.match(/^[ +U-]?\s*([0-9a-f]{40,})\s+(.+)$/);
+      if (!m) continue;
+      // git 对含空格路径会 C-quote（双引号包裹），做简单还原
+      let subPath = m[2].trim();
+      if (subPath.startsWith('"') && subPath.endsWith('"')) {
+        subPath = subPath.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+      }
+      if (!subPath) continue;
+
+      // 统一为正斜杠路径，避免 Windows 反斜杠与正斜杠混合
+      const subPathInternal = normalizePathInternal(`${hexoPath}/${subPath}`);
+      const escapedSubPath = escapeShellArg(subPathInternal);
+      const stR = await ipcRenderer.invoke('execute-command', `git -C ${escapedSubPath} status --porcelain`);
+      logs.push({ ...stR, timestamp: new Date().toLocaleString(), command: `git -C ${subPath} status --porcelain` });
+
+      const stOutput = ((stR.stdout || '') + (stR.stderr || '')).trim();
+      if (!stOutput) continue; // 该子模块内部无修改，跳过
+
+      steps.push(
+        // 与主仓库相同的方式配置子模块身份（避免 -c 内联参数在 PowerShell 下的解析风险）
+        { cmd: `git -C ${escapedSubPath} config user.name ${escapedUsername}`, log: `git -C ${subPath} config user.name`, name: '配置子模块用户名' },
+        { cmd: `git -C ${escapedSubPath} config user.email ${escapedEmail}`, log: `git -C ${subPath} config user.email`, name: '配置子模块邮箱' },
+        { cmd: `git -C ${escapedSubPath} add -A`, log: `git -C ${subPath} add -A`, name: '暂存子模块修改' },
+        {
+          cmd: `git -C ${escapedSubPath} commit -m ${escapedCommitMessage}`,
+          log: `git -C ${subPath} commit -m "${commitMessage}"`,
+          name: '提交子模块修改',
+          tolerable: (output) => output.includes('nothing to commit') || output.includes('无文件要提交') || output.includes('没有要提交的'),
+        },
+      );
+    }
+
+    steps.push(
+      { cmd: `git -C ${escapedHexoPath} add .`, log: 'git add .', name: '添加文件' },
+      {
+        cmd: `git -C ${escapedHexoPath} commit -m ${escapedCommitMessage}`,
+        log: `git commit -m "${commitMessage}"`,
+        name: '提交更改',
+        tolerable: (output) => output.includes('nothing to commit') || output.includes('无文件要提交') || output.includes('没有要提交的') || output.includes('no changes added to commit'),
+      },
+    );
+
+    for (const step of steps) {
+      const r = await ipcRenderer.invoke('execute-command', step.cmd);
+      logs.push({ ...r, timestamp: new Date().toLocaleString(), command: step.log });
+
+      if (!r.success) {
+        const combined = (r.stdout || '') + (r.stderr || '');
+        if (step.tolerable && step.tolerable(combined)) {
+          continue; // 非致命，继续下一步
+        }
+        return { success: false, error: `[${step.name}] ${r.stderr || r.error || 'unknown error'}`, logs };
+      }
+    }
+
+    // 推送到远程
+    // 优化点：不再无条件执行 `git pull --rebase`（该步骤会发起网络请求，在网络不稳定时
+    // 可能耗时数十秒甚至失败，是之前推送慢/卡住的主因）。
+    // 改为：直接 push；仅当被拒绝（远程有新提交）时才按需 pull --rebase 后重试一次。
+    const pushCmd = `git -C ${escapedHexoPath} push -u origin ${escapedBranch}`;
+    const pushLog = `git push -u origin ${pushBranch}`;
+    const pushR = await ipcRenderer.invoke('execute-command', pushCmd);
+    logs.push({ ...pushR, timestamp: new Date().toLocaleString(), command: pushLog });
+
+    const pushCombined = (pushR.stdout || '') + (pushR.stderr || '');
+    // PowerShell 下 git push 可能把进度信息写到 stderr 导致 success 误判为 false，需检测实际成功标志
+    const isPushActuallySuccess = pushCombined.includes('->') ||
+      pushCombined.includes('Everything up-to-date') ||
+      pushCombined.includes('已是最新') ||
+      pushCombined.includes('set up to track');
+
+    if (pushR.success || isPushActuallySuccess) {
+      return { success: true, logs };
+    }
+
+    // push 被拒绝（远程有新提交，non-fast-forward）
+    const isPushNonFastForward = pushCombined.includes('fetch first') ||
+      pushCombined.includes('rejected') ||
+      pushCombined.includes('non-fast-forward') ||
+      pushCombined.includes('强制更新') ||
+      pushCombined.includes('failed to push some refs');
+
+    if (!isPushNonFastForward) {
+      // 其他失败（认证失败、网络问题、仓库地址错误等），直接报错
+      return { success: false, error: `[推送到远程] ${pushR.stderr || pushR.error || 'unknown error'}`, logs };
+    }
+
+    // 按需拉取远程最新代码并重试 push
+    const pullCmd = `git -C ${escapedHexoPath} pull --rebase origin ${escapedBranch}`;
+    const pullResult = await ipcRenderer.invoke('execute-command', pullCmd);
+    logs.push({ ...pullResult, timestamp: new Date().toLocaleString(), command: `git pull --rebase origin ${pushBranch}` });
+
+    if (pullResult.success) {
+      const retryResult = await ipcRenderer.invoke('execute-command', pushCmd);
+      logs.push({ ...retryResult, timestamp: new Date().toLocaleString(), command: `${pushLog} (重试)` });
+
+      const retryCombined = (retryResult.stdout || '') + (retryResult.stderr || '');
+      const retryActuallySuccess = retryCombined.includes('->') ||
+        retryCombined.includes('Everything up-to-date') ||
+        retryCombined.includes('已是最新');
+
+      if (retryResult.success || retryActuallySuccess) {
+        return { success: true, logs };
+      }
+
+      return { success: false, error: `[推送到远程] pull --rebase 后重试仍失败: ${retryResult.stderr || retryResult.error || 'unknown error'}`, logs };
+    }
+
+    // pull 失败：区分网络类错误（保留本地修改并提示重试）与冲突类错误（需要 abort 恢复）
+    const pullCombined = (pullResult.stdout || '') + (pullResult.stderr || '');
+    const isPullNetworkError = /couldn't find remote ref|could not find remote ref|no such branch|unknown revision|no upstream|has no upstream|set-upstream|did not match any file|unable to access|could not resolve host|connection refused|connection timed out|operation timed out|timed out|reset by peer|过早的文件结束|early eof|invalid index-pack|fetch-pack|index-pack|network is unreachable|远程主机/i.test(pullCombined);
+
+    if (isPullNetworkError) {
+      return {
+        success: false,
+        error: `[拉取远程最新代码] 网络不稳定导致拉取失败，本地修改已保留，请检查网络后重试。详情: ${pullResult.stderr || pullResult.error || 'unknown error'}`,
+        logs,
+      };
+    }
+
+    // 冲突类错误：abort 恢复工作区
+    const abortResult = await ipcRenderer.invoke('execute-command', `git -C ${escapedHexoPath} rebase --abort`);
+    logs.push({ ...abortResult, timestamp: new Date().toLocaleString(), command: 'git rebase --abort' });
+
+    return {
+      success: false,
+      error: `[拉取远程最新代码] 远程与本地存在冲突，已中止合并（git rebase --abort）。请先手动解决冲突或核对远程仓库后重试。详情: ${pullResult.stderr || pullResult.error || 'unknown error'}`,
+      logs,
+    };
   };
 
   // 推送项目到远程仓库

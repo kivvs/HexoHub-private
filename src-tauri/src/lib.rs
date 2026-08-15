@@ -65,6 +65,36 @@ async fn read_file(file_path: String) -> Result<String, String> {
 }
 
 
+// 跨 Electron / Tauri 共享面板设置文件
+// Windows 路径与 Electron 的 app.getPath('appData') 对齐：%APPDATA%/HexoHub/panel-settings.json
+fn shared_panel_settings_path() -> Result<PathBuf, String> {
+    let base = std::env::var("APPDATA")
+        .or_else(|_| std::env::var("HOME"))
+        .map_err(|_| "无法确定用户数据目录".to_string())?;
+    let dir = PathBuf::from(base).join("HexoHub");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("panel-settings.json"))
+}
+
+#[tauri::command]
+async fn read_shared_panel_settings() -> Result<Option<String>, String> {
+    let path = shared_panel_settings_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str::<serde_json::Value>(&content).map_err(|e| e.to_string())?;
+    Ok(Some(content))
+}
+
+#[tauri::command]
+async fn write_shared_panel_settings(content: String) -> Result<bool, String> {
+    serde_json::from_str::<serde_json::Value>(&content).map_err(|e| e.to_string())?;
+    fs::write(shared_panel_settings_path()?, content)
+        .map(|_| true)
+        .map_err(|e| e.to_string())
+}
+
 // 写入文件
 #[tauri::command]
 async fn write_file(file_path: String, content: String) -> Result<bool, String> {
@@ -80,6 +110,18 @@ async fn write_file_from_buffer(file_path: String, bytes: Vec<u8>) -> Result<boo
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     fs::write(&file_path, bytes)
+        .map(|_| true)
+        .map_err(|e| e.to_string())
+}
+
+// 递归删除目录（主题安装失败清理、移除嵌套 .git）
+#[tauri::command]
+async fn remove_directory(directory_path: String) -> Result<bool, String> {
+    let path = PathBuf::from(directory_path);
+    if !path.exists() {
+        return Ok(true);
+    }
+    fs::remove_dir_all(path)
         .map(|_| true)
         .map_err(|e| e.to_string())
 }
@@ -185,9 +227,11 @@ async fn execute_command(command: String, _app_handle: tauri::AppHandle) -> Comm
         #[cfg(target_os = "windows")]
         {
             // Windows: raw_arg 传 "/C <原始命令>"，保留双引号原样
-            Command::new("cmd")
-                .raw_arg(format!("/C {}", command))
-                .output()
+            let mut cmd = Command::new("cmd");
+            cmd.raw_arg(format!("/C {}", command));
+            // 隐藏命令行窗口，避免一键发布等流程弹出多个 cmd 窗口
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            cmd.output()
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -1007,8 +1051,11 @@ pub fn run() {
     .manage(HexoServer(Mutex::new(None)))
     .invoke_handler(tauri::generate_handler![
         read_file,
+        read_shared_panel_settings,
+        write_shared_panel_settings,
         write_file,
         write_file_from_buffer,
+        remove_directory,
         delete_file,
         copy_file,
         list_files,

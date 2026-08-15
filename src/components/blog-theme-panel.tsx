@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { getIpcRenderer, isDesktopApp } from '@/lib/desktop-api';
 import { fetchHexoThemeCatalog, toSshUrl, type HexoThemeInfo } from '@/lib/hexo-themes-catalog';
+import { escapeShellArg, normalizePathInternal } from '@/lib/utils';
 
 interface BlogThemePanelProps {
   hexoPath: string;
@@ -35,6 +36,10 @@ interface ThemeEntry {
   version?: string;
   isValidHexo: boolean;
   frameworkHint?: string;
+  // 主题 peerDependencies 中声明的 hexo 渲染器（如 hexo-renderer-pug / hexo-renderer-sass）
+  requiredRenderers: string[];
+  // 主题 scripts 目录 require 的第三方运行时依赖（如 js-yaml），缺失会导致 helper 未注册而白屏
+  requiredScriptDeps: string[];
 }
 
 export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProps) {
@@ -88,12 +93,17 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
     ipcRenderer: any,
     pkgPath: string,
     fallbackName: string
-  ): Promise<{ hasPackageJson: boolean; packageName?: string; version?: string }> => {
+  ): Promise<{ hasPackageJson: boolean; packageName?: string; version?: string; peerDependencies?: Record<string, string> }> => {
     try {
       const pkgContent = await ipcRenderer.invoke('read-file', pkgPath);
       try {
         const pkg = JSON.parse(pkgContent);
-        return { hasPackageJson: true, packageName: pkg.name || fallbackName, version: pkg.version };
+        return {
+          hasPackageJson: true,
+          packageName: pkg.name || fallbackName,
+          version: pkg.version,
+          peerDependencies: pkg.peerDependencies,
+        };
       } catch {
         return { hasPackageJson: true, packageName: fallbackName };
       }
@@ -130,13 +140,63 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
       // 忽略
     }
     const isValidHexo = hasLayout || hasEjsOrPug;
+    // 主题声明但项目可能未安装的渲染器依赖（缺失会导致模板源码直接输出，即"白屏"）
+    const requiredRenderers = Object.keys(info.peerDependencies || {}).filter((k) => k.startsWith('hexo-renderer-'));
+
+    // 扫描主题 scripts 目录，收集 require 的第三方运行时依赖（排除相对路径、Node 内置模块、hexo 自身）
+    const requiredScriptDeps: string[] = [];
+    const builtinModules = new Set([
+      'fs', 'path', 'url', 'util', 'os', 'crypto', 'stream', 'events', 'child_process',
+      'http', 'https', 'querystring', 'zlib', 'buffer', 'process', 'module', 'net', 'tls',
+    ]);
+    try {
+      const scriptsDir = `${dirPath}/scripts`;
+      const collectRequires = async (dir: string) => {
+        let files: any[] = [];
+        try {
+          files = await ipcRenderer.invoke('list-files', dir);
+        } catch {
+          return;
+        }
+        for (const f of files) {
+          if (f.isDirectory) {
+            await collectRequires(f.path);
+          } else if (f.name.endsWith('.js')) {
+            try {
+              const js = await ipcRenderer.invoke('read-file', f.path);
+              const re = /require\(\s*["']([^"']+)["']\s*\)/g;
+              let m: RegExpExecArray | null;
+              while ((m = re.exec(js)) !== null) {
+                const spec = m[1];
+                if (!spec || spec.startsWith('.') || spec.startsWith('/') || spec.startsWith('#')) continue;
+                // 作用域包取前两段，普通包取第一段
+                const pkg = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];
+                if (!builtinModules.has(pkg) && pkg !== 'hexo' && !pkg.startsWith('hexo-')) {
+                  if (!requiredScriptDeps.includes(pkg)) requiredScriptDeps.push(pkg);
+                }
+              }
+            } catch {
+              // 忽略单个脚本读取失败
+            }
+          }
+        }
+      };
+      await collectRequires(scriptsDir);
+    } catch {
+      // 忽略 scripts 目录扫描失败
+    }
+
     return {
       name,
       configName: name,
       source,
       isValidHexo,
       frameworkHint: frameworkHint || (isValidHexo ? undefined : '不是有效的 Hexo 主题'),
-      ...info,
+      hasPackageJson: info.hasPackageJson,
+      packageName: info.packageName,
+      version: info.version,
+      requiredRenderers,
+      requiredScriptDeps,
     };
   };
 
@@ -197,6 +257,49 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
     return await ipcRenderer.invoke('execute-hexo-command', command, hexoPath);
   };
 
+  // 检查项目 node_modules 中是否已安装某个 hexo 渲染器
+  const hasRenderer = async (ipcRenderer: any, renderer: string): Promise<boolean> => {
+    try {
+      const files = await ipcRenderer.invoke('list-files', `${hexoPath}/node_modules/${renderer}`);
+      return Array.isArray(files) && files.length > 0;
+    } catch {
+      return false;
+    }
+  };
+
+  // 自动安装主题缺失的渲染器与脚本运行时依赖（如 hexo-renderer-pug / hexo-renderer-sass / js-yaml）
+  // 缺失渲染器会导致 Hexo 把模板源码直接输出（即"白屏"）；缺失脚本依赖会导致主题 helper 未注册而白屏
+  const ensureThemeRenderers = async (ipcRenderer: any, entry: ThemeEntry, onProgress: (msg: string) => void) => {
+    const missing = new Set<string>();
+    for (const renderer of entry.requiredRenderers) {
+      if (!(await hasRenderer(ipcRenderer, renderer))) {
+        missing.add(renderer);
+      }
+    }
+    for (const dep of entry.requiredScriptDeps) {
+      if (!(await hasRenderer(ipcRenderer, dep))) {
+        missing.add(dep);
+      }
+    }
+    if (missing.size === 0) return;
+
+    // 与创建项目/安装部署插件保持一致的 npm 用法：--prefix 指定工作目录，避免 cd && 的跨平台问题
+    for (const pkgName of missing) {
+      onProgress(zh ? `检测到主题需要依赖 ${pkgName}，正在自动安装...` : `Installing required dependency ${pkgName}...`);
+      const installResult = await ipcRenderer.invoke('execute-command', `npm install ${pkgName} --save --prefix ${hexoPath}`);
+      if (!installResult.success) {
+        // 失败后清理缓存重试一次
+        await ipcRenderer.invoke('execute-command', 'npm cache clean --force');
+        const retryResult = await ipcRenderer.invoke('execute-command', `npm install ${pkgName} --save --prefix ${hexoPath}`);
+        if (!retryResult.success) {
+          throw new Error(
+            `安装依赖 ${pkgName} 失败: ${retryResult.stderr || retryResult.error || retryResult.stdout || '未知错误'}`
+          );
+        }
+      }
+    }
+  };
+
   // 自动回滚：把 _config.yml 的 theme 写回原值，并重新生成恢复站点
   const rollbackTheme = async (ipcRenderer: any, configPath: string, prevRaw: string) => {
     try {
@@ -236,7 +339,7 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
       return;
     }
     const configName = entry.configName;
-    if (isThemeActive(entry, currentTheme)) return;
+    const validatingCurrentTheme = isThemeActive(entry, currentTheme);
 
     setSwitchingTheme(configName);
     setMessage(null);
@@ -250,25 +353,31 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
       const prevMatch = content.match(/^theme:\s*["']?([^"'#\s]+)/m);
       prevRaw = prevMatch ? prevMatch[1].trim() : '';
 
-      // 2. 写入新主题
-      const lines = content.split('\n');
-      let fieldUpdated = false;
-      const updatedLines = lines.map((line: string) => {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('#') || !trimmed.includes(':')) return line;
-        const [key] = trimmed.split(':');
-        if (key.trim() === 'theme') {
-          fieldUpdated = true;
-          const indent = line.match(/^(\s*)/)?.[1] || '';
-          return `${indent}theme: ${configName}`;
-        }
-        return line;
-      });
-      if (!fieldUpdated) updatedLines.push(`theme: ${configName}`);
-      const newContent = updatedLines.join('\n');
-      await ipcRenderer.invoke('write-file', configPath, newContent);
+      // 2. 切换其他主题时写入配置；当前主题则直接进入依赖修复和验证流程
+      if (!validatingCurrentTheme) {
+        const lines = content.split('\n');
+        let fieldUpdated = false;
+        const updatedLines = lines.map((line: string) => {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('#') || !trimmed.includes(':')) return line;
+          const [key] = trimmed.split(':');
+          if (key.trim() === 'theme') {
+            fieldUpdated = true;
+            const indent = line.match(/^(\s*)/)?.[1] || '';
+            return `${indent}theme: ${configName}`;
+          }
+          return line;
+        });
+        if (!fieldUpdated) updatedLines.push(`theme: ${configName}`);
+        await ipcRenderer.invoke('write-file', configPath, updatedLines.join('\n'));
+      }
 
-      // 3. 自动验证：clean + generate
+      // 3. 自动安装主题声明的缺失渲染器（Pug/Sass 等），避免模板源码直接输出造成白屏
+      await ensureThemeRenderers(ipcRenderer, entry, (msg) =>
+        setMessage({ success: false, text: msg })
+      );
+
+      // 4. 自动验证：clean + generate
       setMessage({
         success: false,
         text: zh ? `正在验证主题「${entry.name}」（清理并重新生成）...` : `Validating theme "${entry.name}" (clean + generate)...`,
@@ -277,21 +386,23 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
       const genResult = await runHexoCommand(ipcRenderer, 'generate');
       const genOutput = `${genResult?.stdout || ''}\n${genResult?.stderr || ''}`;
 
-      // 4. 判定是否生成失败（No layout / 0 文件 / 命令失败）
+      // 5. 判定是否生成失败：
+      // - No layout / 0 files generated：不是有效 Hexo 主题
+      // - 命令失败
       const hasNoLayout = /No layout/i.test(genOutput);
       const zeroFiles = /0 files generated/i.test(genOutput);
       const genFailed = !genResult?.success || hasNoLayout || zeroFiles;
 
       if (genFailed) {
-        // 5. 自动回滚原主题并恢复站点
+        // 6. 自动回滚原主题并恢复站点
         await rollbackTheme(ipcRenderer, configPath, prevRaw);
         await loadThemes();
         setCurrentTheme(prevRaw);
         setMessage({
           success: false,
           text: zh
-            ? `主题「${entry.name}」验证失败（${hasNoLayout ? '缺少 layout 模板，不是有效的 Hexo 主题' : '生成结果为 0 个文件'}），已自动回滚到原主题「${prevRaw}」并重新生成，站点未受影响。`
-            : `Theme "${entry.name}" failed validation (${hasNoLayout ? 'no layout templates, not a valid Hexo theme' : '0 files generated'}). Rolled back to "${prevRaw}" and regenerated; your site is unaffected.`,
+            ? `主题「${entry.name}」验证失败（${hasNoLayout ? '缺少 layout 模板，不是有效的 Hexo 主题' : zeroFiles ? '生成结果为 0 个文件' : '生成命令执行失败'}），已自动回滚到原主题「${prevRaw}」并重新生成，站点未受影响。`
+            : `Theme "${entry.name}" failed validation (${hasNoLayout ? 'no layout templates, not a valid Hexo theme' : zeroFiles ? '0 files generated' : 'generate command failed'}). Rolled back to "${prevRaw}" and regenerated; your site is unaffected.`,
         });
         return;
       }
@@ -301,8 +412,12 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
       setMessage({
         success: true,
         text: zh
-          ? `博客主题已切换为「${entry.name}」，已验证生成成功（不再白屏）。如需发布请执行「部署」。`
-          : `Blog theme switched to "${entry.name}" and verified. Deploy to publish.`,
+          ? (validatingCurrentTheme
+              ? `主题「${entry.name}」依赖已检查并重新生成成功。`
+              : `博客主题已切换为「${entry.name}」，依赖已安装并验证生成成功。如需发布请执行「部署」。`)
+          : (validatingCurrentTheme
+              ? `Theme "${entry.name}" dependencies were checked and regeneration succeeded.`
+              : `Blog theme switched to "${entry.name}", dependencies installed, and generation verified. Deploy to publish.`),
       });
     } catch (error) {
       console.error('切换博客主题失败:', error);
@@ -348,7 +463,7 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
     return themes.some((t) => stripHexoThemePrefix(t.name).toLowerCase() === normalized);
   };
 
-  // 下载并安装远程主题：SSH git clone 到 themes/<name>，校验 layout 目录
+  // 下载并安装远程主题：HTTPS 优先、SSH 兜底、强校验、依赖安装、移除嵌套 Git 元数据
   const installTheme = async (info: HexoThemeInfo) => {
     if (!isDesktopApp() || !hexoPath || installingTheme) return;
     if (isThemeInstalled(info.name)) {
@@ -356,61 +471,82 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
       return;
     }
 
+    const ipcRenderer = await getIpcRenderer();
+    const targetDir = normalizePathInternal(`${hexoPath}/themes/${info.name}`);
+    const escapedTargetDir = escapeShellArg(targetDir);
+    const httpsUrl = info.link.endsWith('.git') ? info.link : `${info.link.replace(/\/$/, '')}.git`;
     const sshUrl = toSshUrl(info.link);
-    const targetDir = `${hexoPath}/themes/${info.name}`;
     setInstallingTheme(info.name);
     setInstallLog('');
 
     const appendLog = (line: string) => setInstallLog((prev) => (prev ? `${prev}\n${line}` : line));
+    const cleanupTarget = async () => {
+      await ipcRenderer.invoke('remove-directory', targetDir).catch(() => undefined);
+    };
 
     try {
       appendLog(zh ? `开始安装主题「${info.name}」...` : `Installing theme "${info.name}"...`);
-      appendLog(`git clone ${sshUrl}`);
-      const ipcRenderer = await getIpcRenderer();
-      const result = await ipcRenderer.invoke('execute-command', `git clone --depth 1 ${sshUrl} ${targetDir}`);
+      await cleanupTarget();
+
+      // HTTPS 无需用户配置 SSH 密钥，优先使用；失败后再尝试 SSH。
+      appendLog(`git clone --depth 1 ${httpsUrl}`);
+      let result = await ipcRenderer.invoke(
+        'execute-command',
+        `git clone --depth 1 ${escapeShellArg(httpsUrl)} ${escapedTargetDir}`
+      );
+      if (!result.success) {
+        appendLog(zh ? 'HTTPS 下载失败，正在尝试 SSH...' : 'HTTPS clone failed; trying SSH...');
+        appendLog(result.stderr || result.error || result.stdout || '');
+        await cleanupTarget();
+        result = await ipcRenderer.invoke(
+          'execute-command',
+          `git clone --depth 1 ${escapeShellArg(sshUrl)} ${escapedTargetDir}`
+        );
+      }
       if (!result.success) {
         const err = result.stderr || result.error || result.stdout || '未知错误';
-        appendLog(err);
-        setMessage({
-          success: false,
-          text: zh
-            ? `主题「${info.name}」下载失败。请确认已配置 GitHub SSH 密钥（~/.ssh/id_rsa），或稍后重试。\n${err}`
-            : `Failed to download theme "${info.name}". Ensure your GitHub SSH key is configured, then retry.\n${err}`,
-        });
-        return;
+        await cleanupTarget();
+        throw new Error(zh
+          ? `HTTPS 与 SSH 下载均失败：${err}`
+          : `Both HTTPS and SSH clone failed: ${err}`);
       }
-      appendLog(zh ? '下载完成，正在校验主题结构...' : 'Downloaded. Validating theme structure...');
 
-      // 校验是否是有效 Hexo 主题（layout 目录）
+      appendLog(zh ? '下载完成，正在校验主题结构...' : 'Downloaded. Validating theme structure...');
       const files = await ipcRenderer
         .invoke('list-files', targetDir)
-        .then((fs: any[]) => fs.map((f: any) => f.name.toLowerCase()))
+        .then((items: any[]) => items.map((item: any) => item.name.toLowerCase()))
         .catch(() => [] as string[]);
-      const hasLayout = files.includes('layout');
-      if (!hasLayout) {
-        appendLog(zh ? '警告：该主题缺少 layout/ 目录，可能不是 Hexo 主题' : 'Warning: no layout/ directory - may not be a Hexo theme');
+
+      if (!files.includes('layout')) {
+        await cleanupTarget();
+        throw new Error(zh
+          ? '下载内容缺少 layout/ 目录，不是有效的 Hexo 主题，已自动清理'
+          : 'Downloaded repository has no layout/ directory and is not a valid Hexo theme; cleaned up');
       }
 
-      // 若主题自带 _config.yml，则生成根目录 _config.<name>.yml 的空配置占位（可选）
-      const hasOwnConfig = files.includes('_config.yml');
-      if (hasOwnConfig) {
-        appendLog(zh ? '主题已自带 _config.yml（作为主题默认配置）' : 'Theme has its own _config.yml (default config)');
-      }
+      // 扫描 package.json peerDependencies 与 scripts require，自动安装渲染器和运行时依赖。
+      const installedEntry = await inspectTheme(ipcRenderer, targetDir, info.name, 'themes');
+      await ensureThemeRenderers(ipcRenderer, installedEntry, appendLog);
+
+      // clone 目录内的 .git 会被主仓库视为嵌套仓库，造成 git submodule status / git add 异常。
+      await ipcRenderer.invoke('remove-directory', `${targetDir}/.git`).catch(() => undefined);
+      appendLog(zh ? '已移除主题内部 Git 元数据，主题将作为普通文件随博客推送' : 'Removed nested Git metadata; theme will be committed as normal blog files');
 
       await loadThemes();
-      appendLog(zh ? '安装完成！可点击主题卡片一键切换。' : 'Install complete! Click the theme card to switch.');
+      appendLog(zh ? '安装与依赖配置完成，可安全切换主题。' : 'Theme and dependencies installed; it is ready to switch safely.');
       setMessage({
         success: true,
         text: zh
-          ? `主题「${info.name}」已安装到 themes/，现在可以一键切换（切换后需「清理 + 生成」）`
-          : `Theme "${info.name}" installed to themes/. You can now switch to it (run Clean + Generate afterwards).`,
+          ? `主题「${info.name}」安装完成，所需渲染器已检查，且不会产生 Git 子模块错误。`
+          : `Theme "${info.name}" installed with required renderers and without nested Git/submodule issues.`,
       });
     } catch (error) {
+      await cleanupTarget();
       console.error('安装主题失败:', error);
       appendLog(String(error));
       setMessage({
         success: false,
-        text: (zh ? '安装主题失败: ' : 'Failed to install theme: ') + (error instanceof Error ? error.message : String(error)),
+        text: (zh ? '安装主题失败，已清理不完整目录: ' : 'Theme installation failed; incomplete directory cleaned: ') + (error instanceof Error ? error.message : String(error)),
       });
     } finally {
       setInstallingTheme(null);
@@ -512,8 +648,12 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
                         key={`${theme.source}-${theme.configName}`}
                         type="button"
                         onClick={() => switchTheme(theme)}
-                        disabled={disabled || isSwitching || isActive}
-                        title={disabled ? theme.frameworkHint || (zh ? '非有效 Hexo 主题' : 'Not a valid Hexo theme') : isActive ? (zh ? '当前使用中的主题' : 'Current theme') : (zh ? `一键切换到 ${theme.name}` : `Switch to ${theme.name}`)}
+                        disabled={disabled || isSwitching}
+                        title={disabled
+                          ? theme.frameworkHint || (zh ? '非有效 Hexo 主题' : 'Not a valid Hexo theme')
+                          : isActive
+                            ? (zh ? '点击检查依赖并重新生成当前主题' : 'Check dependencies and regenerate current theme')
+                            : (zh ? `一键切换到 ${theme.name}` : `Switch to ${theme.name}`)}
                         className={`group rounded-xl border p-4 text-left transition-all hover:-translate-y-1 hover:shadow-lg ${
                           disabled
                             ? 'cursor-not-allowed border-red-200 bg-red-50/50 opacity-80 dark:border-red-900/60 dark:bg-red-950/20'

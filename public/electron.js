@@ -15,6 +15,45 @@ ipcMain.handle('get-app-version', async () => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Electron / Tauri 跨版本共享面板设置
+// 两个桌面框架各自的 WebView localStorage 目录不同，因此使用统一 JSON 文件同步。
+// Windows: %APPDATA%/HexoHub/panel-settings.json
+// ---------------------------------------------------------------------------
+const getSharedPanelSettingsPath = () => {
+  const sharedDir = path.join(app.getPath('appData'), 'HexoHub');
+  if (!fs.existsSync(sharedDir)) {
+    fs.mkdirSync(sharedDir, { recursive: true });
+  }
+  return path.join(sharedDir, 'panel-settings.json');
+};
+
+ipcMain.handle('read-shared-panel-settings', async () => {
+  try {
+    const settingsPath = getSharedPanelSettingsPath();
+    if (!fs.existsSync(settingsPath)) {
+      return null;
+    }
+    const content = fs.readFileSync(settingsPath, 'utf8');
+    JSON.parse(content); // 校验文件，避免向前端返回损坏数据
+    return content;
+  } catch (error) {
+    console.error('读取共享面板设置失败:', error);
+    return null;
+  }
+});
+
+ipcMain.handle('write-shared-panel-settings', async (event, content) => {
+  try {
+    JSON.parse(content); // 只允许写入有效 JSON
+    fs.writeFileSync(getSharedPanelSettingsPath(), content, 'utf8');
+    return { success: true };
+  } catch (error) {
+    console.error('写入共享面板设置失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 // 图片处理相关的 IPC 处理程序
 // 注册从缓冲区写入文件的 IPC 处理程序
 ipcMain.handle('write-file-from-buffer', async (event, destinationPath, buffer) => {
@@ -298,6 +337,16 @@ ipcMain.handle('write-file', async (event, filePath, content) => {
   const fs = require('fs').promises;
   try {
     await fs.writeFile(filePath, content, 'utf8');
+    return true;
+  } catch (error) {
+    throw error;
+  }
+});
+
+ipcMain.handle('remove-directory', async (event, directoryPath) => {
+  const fs = require('fs').promises;
+  try {
+    await fs.rm(directoryPath, { recursive: true, force: true });
     return true;
   } catch (error) {
     throw error;

@@ -274,6 +274,14 @@ export const ipcRenderer = {
         return fileOperations.selectDirectory();
       case 'select-file':
         return fileOperations.selectFile();
+      case 'read-shared-panel-settings': {
+        const { invoke } = await import('@tauri-apps/api/core');
+        return invoke('read_shared_panel_settings');
+      }
+      case 'write-shared-panel-settings': {
+        const { invoke } = await import('@tauri-apps/api/core');
+        return invoke('write_shared_panel_settings', { content: args[0] });
+      }
       case 'read-file':
         return fileOperations.readFile(args[0]);
       case 'convert-file-src':
@@ -282,6 +290,10 @@ export const ipcRenderer = {
         return fileOperations.writeFile(args[0], args[1]);
       case 'copy-file':
         return fileOperations.copyFile(args[0], args[1]);
+      case 'remove-directory': {
+        const { invoke } = await import('@tauri-apps/api/core');
+        return invoke('remove_directory', { directoryPath: args[0] });
+      }
       case 'delete-file':
         return fileOperations.deleteFile(args[0]);
       case 'list-files':

@@ -2,7 +2,7 @@
   "name": "nextjs_tailwind_shadcn_ts",
   "version": "3.8.1",
   "description": "HexoHub Desktop Application",
-  "author": "Lisiran",
+  "author": "kivvs",
   "private": true,
   "main": "public/electron.js",
   "homepage": "./",
@@ -177,7 +177,8 @@
         }
       ],
       "icon": "public/icon.ico",
-      "artifactName": "${productName}-Electron-Windows-Setup-${version}.${ext}"
+      "artifactName": "${productName}-Electron-Windows-Setup-${version}.${ext}",
+      "signAndEditExecutable": false
     },
     "electronLanguages": [
       "zh-CN",
