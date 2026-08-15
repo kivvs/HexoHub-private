@@ -101,3 +101,29 @@ export function replaceImageSources(
   }
   return result;
 }
+
+// 匹配带 style 属性的 <font> 标签（语雀/富文本复制场景）
+const FONT_STYLE_REGEX = /<font\s+style\s*=\s*["'][^"']*["'][^>]*>([\s\S]*?)<\/font\s*>/gi;
+
+// 匹配任意带 style 属性的内联标签（span/a 等），保留标签本身但移除 style
+const INLINE_STYLE_ATTR_REGEX = /(<(?:span|a|strong|em|b|i|u|mark|del|s)[^>]*?)\sstyle\s*=\s*["'][^"']*["']([^>]*>)/gi;
+
+/**
+ * 清理富文本粘贴内容：
+ * 1. 删除语雀/富文本常见的 <font style="...">...</font> 标签，仅保留包裹的文字内容
+ * 2. 移除 span/a 等内联标签上的 style 属性（保留标签结构）
+ */
+export function cleanRichTextHtml(content: string): string {
+  let result = content;
+
+  // 删除带 style 的 <font> 标签，保留内部内容
+  result = result.replace(FONT_STYLE_REGEX, (_, inner: string) => inner);
+
+  // 移除内联标签上的 style 属性（处理属性顺序：style 在开头或中间）
+  result = result.replace(INLINE_STYLE_ATTR_REGEX, '$1$2');
+
+  // 移除其他任何标签上的 style="..."（宽松兜底：单/双引号）
+  result = result.replace(/\sstyle\s*=\s*(["'])[^"']*?\1/gi, '');
+
+  return result;
+}

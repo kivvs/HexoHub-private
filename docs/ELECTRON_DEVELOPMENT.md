@@ -2,7 +2,7 @@
 
 1. **克隆本仓库**
    ```bash
-   git clone https://github.com/forever218/HexoHub.git
+   git clone https://github.com/kivvs/HexoHub-private.git
    ```
 
 2. **安装依赖**

@@ -306,17 +306,21 @@ html[data-app-theme="sunset"] {
   }
 
   /* 编辑器中文本输入与占位符颜色跟随主题，并添加 Webkit 兜底 */
-  .markdown-editor textarea {
-    color: var(--foreground);
-    -webkit-text-fill-color: var(--foreground);
-    caret-color: var(--primary);
-    background-color: transparent;
+  /* 使用 !important 覆盖 UA 样式（WebView 可能强制文字为白色） */
+  .markdown-editor textarea,
+  .markdown-editor textarea:focus,
+  .markdown-editor textarea:disabled {
+    color: var(--foreground) !important;
+    -webkit-text-fill-color: var(--foreground) !important;
+    caret-color: var(--primary) !important;
+    background-color: transparent !important;
+    text-shadow: none !important;
   }
 
   .markdown-editor textarea::placeholder {
-    color: var(--muted-foreground);
-    -webkit-text-fill-color: var(--muted-foreground);
-    opacity: 1;
+    color: var(--muted-foreground) !important;
+    -webkit-text-fill-color: var(--muted-foreground) !important;
+    opacity: 1 !important;
   }
 
   /* 确保编辑器和预览区域的文字清晰可见 */

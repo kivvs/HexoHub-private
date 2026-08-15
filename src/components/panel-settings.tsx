@@ -1686,10 +1686,10 @@ export function PanelSettings({
       </Card>
       
             {/* 更新检查模块 */}
-      <UpdateChecker 
+      <UpdateChecker
         currentVersion={currentVersion}
-        repoOwner="forever218"
-        repoName="HexoHub"
+        repoOwner="kivvs"
+        repoName="HexoHub-private"
         autoCheckUpdates={autoCheckUpdates}
         onAutoCheckUpdatesChange={onAutoCheckUpdatesChange}
         language={language}
@@ -1731,11 +1731,11 @@ export function PanelSettings({
             <Label>{t.projectAddress}</Label>
             <span
               onClick={async () => {
-                await openExternalLink('https://github.com/forever218/HexoHub');
+                await openExternalLink('https://github.com/kivvs/HexoHub-private');
               }}
               className="text-sm text-blue-600 hover:text-blue-800 hover:underline block cursor-pointer"
             >
-              https://github.com/forever218/HexoHub
+              https://github.com/kivvs/HexoHub-private
             </span>
           </div>
           
@@ -1743,11 +1743,11 @@ export function PanelSettings({
             <Label>{t.contactMe}</Label>
             <span
               onClick={async () => {
-                await openExternalLink('https://github.com/forever218');
+                await openExternalLink('https://github.com/kivvs');
               }}
               className="text-sm text-blue-600 hover:text-blue-800 hover:underline block cursor-pointer"
             >
-              https://github.com/forever218
+              https://github.com/kivvs
             </span>
           </div>
           

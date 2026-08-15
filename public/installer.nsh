@@ -143,6 +143,6 @@ Var NodeJsPath
   DetailPrint "👋 感谢你使用 HexoHub！"
   DetailPrint ""
   DetailPrint "💡 有任何建议或问题？欢迎访问："
-  DetailPrint "   https://github.com/forever218/HexoHub/issues"
+  DetailPrint "   https://github.com/kivvs/HexoHub-private/issues"
   DetailPrint "======================================"
 !macroend

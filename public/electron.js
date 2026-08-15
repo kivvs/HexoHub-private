@@ -998,8 +998,8 @@ ipcMain.handle('check-for-updates', async () => {
   const { version } = require(path.join(__dirname, '..', 'package.json'));
   
   return new Promise((resolve) => {
-    const repoOwner = 'forever218';
-    const repoName = 'HexoHub';
+    const repoOwner = 'kivvs';
+    const repoName = 'HexoHub-private';
     const options = {
       hostname: 'api.github.com',
       path: `/repos/${repoOwner}/${repoName}/releases/latest`,

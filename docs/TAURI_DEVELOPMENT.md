@@ -167,6 +167,6 @@ npm run tauri:dev --verbose
 - [Tauri 官方文档](https://tauri.app/)
 - [Rust 官方文档](https://doc.rust-lang.org/)
 - [Next.js 文档](https://nextjs.org/docs)
-- [项目 GitHub 仓库](https://github.com/forever218/HexoHub)
+- [项目 GitHub 仓库](https://github.com/kivvs/HexoHub-private)
 
 

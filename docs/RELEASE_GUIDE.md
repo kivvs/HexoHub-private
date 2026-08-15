@@ -77,14 +77,14 @@ git push --follow-tags
 
 ### 3. 等待自动构建（约 15 分钟）
 
-在本库，访问：https://github.com/forever218/HexoHub/actions
+在本库，访问：https://github.com/kivvs/HexoHub-private/actions
 
 在你fork的库，访问：https://github.com/[YourUsername]/HexoHub/actions
 
 
 ### 4. 检查并发布 Release
 
-在本库，访问：https://github.com/forever218/HexoHub/releases
+在本库，访问：https://github.com/kivvs/HexoHub-private/releases
 
 在你fork的库，访问：https://github.com/[YourUsername]/HexoHub/releases
 
@@ -158,11 +158,11 @@ npm version minor
 git push --follow-tags
 
 # 5. 查看构建进度
-# 浏览器打开：https://github.com/forever218/HexoHub/actions
+# 浏览器打开：https://github.com/kivvs/HexoHub-private/actions
 # ☕ 去喝杯咖啡，等 15 分钟
 
 # 6. 构建完成后，检查 Release
-# 浏览器打开：https://github.com/forever218/HexoHub/releases
+# 浏览器打开：https://github.com/kivvs/HexoHub-private/releases
 # 编辑 Draft Release，添加更新说明
 
 # 7. 点击 "Publish release"

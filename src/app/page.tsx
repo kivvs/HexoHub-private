@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -59,7 +60,10 @@ import {
   Rocket,
   RefreshCw,
   Monitor,
-  Sparkles
+  Sparkles,
+  Undo2,
+  Eraser,
+  Stethoscope
 } from 'lucide-react';
 import { Language, getTexts } from '@/utils/i18n';
 import { MarkdownEditorWrapper } from '@/components/markdown-editor-wrapper';
@@ -80,6 +84,7 @@ import { CreateHexoDialog } from '@/components/create-hexo-dialog';
 import { CustomTitlebar } from '@/components/custom-titlebar';
 import { AIInspirationDialog } from '@/components/ai-inspiration-dialog';
 import { AIAnalysisDialog } from '@/components/ai-analysis-dialog';
+import { AIDiagnosticDialog } from '@/components/ai-diagnostic-dialog';
 import { getIpcRenderer, isDesktopApp, isTauri } from '@/lib/desktop-api';
 import { commandOperations } from '@/lib/tauri-api';
 import { normalizePath, normalizePathInternal, escapeShellArg } from '@/lib/utils';
@@ -92,7 +97,7 @@ import {
   isAppThemeDark,
   setAppTheme,
 } from '@/lib/theme';
-import { findImageSources, inferImageExtension, replaceImageSources } from '@/lib/extract-images';
+import { findImageSources, inferImageExtension, replaceImageSources, cleanRichTextHtml } from '@/lib/extract-images';
 
 interface Post {
   name: string;
@@ -101,6 +106,82 @@ interface Post {
   size: number;
   modifiedTime: Date;
   frontmatterDate?: Date;
+}
+
+// 字体颜色选择器弹层（Portal 渲染，fixed 定位到锚点按钮下方）
+function ColorPickerPopover({
+  anchorEl,
+  currentTextColor,
+  onPick,
+  onClear,
+  language,
+}: {
+  anchorEl: HTMLElement;
+  currentTextColor: string;
+  onPick: (color: string) => void;
+  onClear: () => void;
+  language: 'zh' | 'en';
+}) {
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+
+  useEffect(() => {
+    const rect = anchorEl.getBoundingClientRect();
+    const popoverWidth = 176; // w-44
+    const viewportWidth = window.innerWidth;
+    // 避免右侧溢出视口
+    let left = rect.right - popoverWidth;
+    if (left < 8) left = 8;
+    if (left + popoverWidth > viewportWidth - 8) left = viewportWidth - popoverWidth - 8;
+    const top = rect.bottom + 4;
+    setPosition({ top, left });
+  }, [anchorEl]);
+
+  const pickerColors = [
+    '#ef4444', '#f97316', '#f59e0b', '#eab308', '#22c55e', '#10b981', '#14b8a6', '#06b6d4',
+    '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#ec4899', '#f43f5e', '#64748b', '#000000',
+  ];
+
+  if (!position) return null;
+
+  return (
+    <div
+      className="fixed z-[9999] w-44 rounded-xl border border-border bg-popover p-2 shadow-lg"
+      style={{ top: position.top, left: position.left }}
+    >
+      <div className="mb-1.5 px-1 text-[11px] font-medium text-muted-foreground">
+        {language === 'zh' ? '文字颜色' : 'Text Color'}
+      </div>
+      <div className="grid grid-cols-8 gap-1.5">
+        {pickerColors.map((color) => (
+          <button
+            key={color}
+            type="button"
+            title={color}
+            onClick={() => onPick(color)}
+            className={`h-5 w-5 rounded-md border transition-transform hover:scale-110 ${currentTextColor === color ? 'border-primary ring-2 ring-primary/40' : 'border-border'}`}
+            style={{ backgroundColor: color }}
+          />
+        ))}
+      </div>
+      <div className="mt-2 flex items-center gap-1.5 border-t border-border pt-1.5">
+        <button
+          type="button"
+          onClick={onClear}
+          className="flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1 text-xs hover:bg-accent"
+        >
+          <Undo2 className="h-3 w-3" />
+          {language === 'zh' ? '清除颜色' : 'Clear'}
+        </button>
+        <input
+          type="color"
+          value={currentTextColor || '#3b82f6'}
+          onChange={(e) => onPick(e.target.value)}
+          className="h-6 w-8 cursor-pointer rounded border border-border bg-transparent p-0"
+          title={language === 'zh' ? '自定义颜色' : 'Custom color'}
+        />
+      </div>
+    </div>
+  );
 }
 
 interface UploadedImage {
@@ -201,6 +282,7 @@ export default function Home() {
   const [openaiApiPath, setOpenaiApiPath] = useState<string>('/chat/completions'); // OpenAI API请求路径后缀
   const [showInspirationDialog, setShowInspirationDialog] = useState<boolean>(false); // 是否显示灵感对话框
   const [showAnalysisDialog, setShowAnalysisDialog] = useState<boolean>(false); // 是否显示分析对话框
+  const [showDiagnosticDialog, setShowDiagnosticDialog] = useState<boolean>(false); // 是否显示 AI 辅助诊断对话框
   const [showDeletePostDialog, setShowDeletePostDialog] = useState<boolean>(false); // 是否显示删除文章确认对话框
   const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]); // Hexo source/images 目录图片
   const [isExtractingImages, setIsExtractingImages] = useState<boolean>(false); // 图片提取状态
@@ -211,6 +293,10 @@ export default function Home() {
   const [imageArticleFilter, setImageArticleFilter] = useState<string>('all'); // 图片文章标签筛选
   const [showImagePickerDialog, setShowImagePickerDialog] = useState<boolean>(false); // 图片引用选择对话框
   const imageManagerDropAreaRef = React.useRef<HTMLDivElement>(null); // 图片管理拖拽区域
+  // 字体颜色功能相关状态
+  const [isTextColorPickerOpen, setIsTextColorPickerOpen] = useState<boolean>(false); // 字体颜色选择器展开状态
+  const [currentTextColor, setCurrentTextColor] = useState<string>(''); // 最近使用的字体颜色
+  const textColorAnchorRef = React.useRef<HTMLDivElement>(null); // 颜色按钮容器 ref（Portal 定位锚点）
   // 预览模式相关状态
   const [previewMode, setPreviewMode] = useState<'static' | 'server'>('static'); // 预览模式，默认为静态预览
   const [forcePreviewRefresh, setForcePreviewRefresh] = useState<boolean>(false); // 控制预览框强制刷新
@@ -678,6 +764,79 @@ export default function Home() {
     const appliedTheme = setAppTheme(themeName);
     setCurrentTheme(themeName);
     setIsDarkMode(isAppThemeDark(appliedTheme));
+  };
+
+  // 将选中文字包裹为 <font color> 标签（字体颜色功能）
+  const handleTextColor = (color: string) => {
+    const textarea = document.querySelector('textarea');
+    if (!textarea) return;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selectedText = postContent.substring(start, end);
+
+    // 若选中文本已被 <font color> 包裹则先去除，再套新颜色（避免嵌套）
+    const stripped = selectedText.replace(/^<font\s+color\s*=\s*["'][^"']*["'][^>]*>([\s\S]*?)<\/font>\s*$/, '$1');
+    const colorTag = `<font color="${color}">${stripped}</font>`;
+
+    const newValue = postContent.substring(0, start) + colorTag + postContent.substring(end);
+    setPostContent(newValue);
+    setCurrentTextColor(color);
+
+    setTimeout(() => {
+      if (stripped.length === 0) {
+        const newPos = start + `<font color="${color}">`.length;
+        textarea.selectionStart = textarea.selectionEnd = newPos;
+      } else {
+        textarea.selectionStart = start;
+        textarea.selectionEnd = start + colorTag.length;
+      }
+      textarea.focus();
+    }, 0);
+  };
+
+  // 清除选中文字的字体颜色
+  const handleClearTextColor = () => {
+    const textarea = document.querySelector('textarea');
+    if (!textarea) return;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selectedText = postContent.substring(start, end);
+
+    const cleaned = selectedText.replace(/^<font\s+color\s*=\s*["'][^"']*["'][^>]*>([\s\S]*?)<\/font>\s*$/, '$1');
+    if (cleaned === selectedText) return;
+
+    const newValue = postContent.substring(0, start) + cleaned + postContent.substring(end);
+    setPostContent(newValue);
+    setCurrentTextColor('');
+
+    setTimeout(() => {
+      textarea.selectionStart = start;
+      textarea.selectionEnd = start + cleaned.length;
+      textarea.focus();
+    }, 0);
+  };
+
+  // 清理富文本格式：删除语雀等 <font style> 标签，保留包裹内容
+  const handleCleanRichText = () => {
+    const cleaned = cleanRichTextHtml(postContent);
+    if (cleaned === postContent) {
+      toast({
+        title: language === 'zh' ? '未发现需清理的格式' : 'Nothing to clean',
+        description: language === 'zh'
+          ? '当前内容中没有 <font style="..."> 等富文本标签'
+          : 'No rich text style tags found in the current content',
+        variant: 'default',
+      });
+      return;
+    }
+    setPostContent(cleaned);
+    toast({
+      title: language === 'zh' ? '格式已清理' : 'Format cleaned',
+      description: language === 'zh' ? '已移除富文本样式标签，保留文字内容' : 'Removed rich text style tags, kept the text content',
+      variant: 'success',
+    });
   };
 
   // 一键切换主题
@@ -3624,16 +3783,28 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
 
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
             {enableAI && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowInspirationDialog(true)}
-                disabled={!isValidHexoProject || isLoading || !apiKey}
-                title={t.getInspiration}
-              >
-                <Lightbulb className="w-4 h-4 mr-2" />
-                {t.getInspiration}
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowInspirationDialog(true)}
+                  disabled={!isValidHexoProject || isLoading || !apiKey}
+                  title={t.getInspiration}
+                >
+                  <Lightbulb className="w-4 h-4 mr-2" />
+                  {t.getInspiration}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowDiagnosticDialog(true)}
+                  disabled={!apiKey}
+                  title={language === 'zh' ? 'AI 辅助诊断（排查软件/项目问题）' : 'AI assistant diagnosis'}
+                >
+                  <Stethoscope className="w-4 h-4 mr-2" />
+                  {language === 'zh' ? 'AI 诊断' : 'AI Diagnose'}
+                </Button>
+              </>
             )}
             <Button
               variant={mainView === 'posts' ? 'default' : 'outline'}
@@ -4746,6 +4917,52 @@ const newContent = content.replace(/^---\n[\s\S]*?\n---/, `---\n${frontMatter}\n
 
                       <div className="w-px h-6 bg-border mx-1" />
 
+                      {/* 字体颜色选择器（Portal 渲染到 body，避免被 sticky 堆叠上下文遮挡） */}
+                      <div className="relative" ref={textColorAnchorRef}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 px-1.5"
+                          onClick={() => setIsTextColorPickerOpen((prev) => !prev)}
+                          title={language === 'zh' ? '文字颜色' : 'Text color'}
+                        >
+                          <span className="relative flex h-4 w-4 items-center justify-center">
+                            <span className="h-3.5 w-3.5 rounded-full border border-border" style={{ backgroundColor: currentTextColor || 'var(--foreground)' }} />
+                          </span>
+                        </Button>
+                        {isTextColorPickerOpen && textColorAnchorRef.current &&
+                          createPortal(
+                            <>
+                              <div className="fixed inset-0 z-[9998]" onClick={() => setIsTextColorPickerOpen(false)} />
+                              <ColorPickerPopover
+                                anchorEl={textColorAnchorRef.current}
+                                currentTextColor={currentTextColor}
+                                onPick={(color) => {
+                                  handleTextColor(color);
+                                  setIsTextColorPickerOpen(false);
+                                }}
+                                onClear={() => {
+                                  handleClearTextColor();
+                                  setIsTextColorPickerOpen(false);
+                                }}
+                                language={language}
+                              />
+                            </>,
+                            document.body
+                          )}
+                      </div>
+
+                      {/* 清理富文本格式：删除语雀 <font style> 标签，保留内容 */}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 px-1.5"
+                        onClick={handleCleanRichText}
+                        title={language === 'zh' ? '清理富文本格式（删除 <font style> 标签，保留文字）' : 'Clean rich text (remove <font style> tags, keep text)'}
+                      >
+                        <Eraser className="h-4 w-4" />
+                      </Button>
+
                       <Button variant="ghost" size="sm" onClick={() => {
                         const textarea = document.querySelector('textarea');
                         if (textarea) {
@@ -5360,6 +5577,26 @@ ${selectedText}
         openaiModel={openaiModel}
         openaiApiEndpoint={openaiApiEndpoint}
         openaiApiPath={openaiApiPath}
+      />
+
+      {/* AI 辅助诊断对话框 */}
+      <AIDiagnosticDialog
+        open={showDiagnosticDialog}
+        onOpenChange={setShowDiagnosticDialog}
+        aiProvider={aiProvider}
+        apiKey={apiKey}
+        language={language}
+        openaiModel={openaiModel}
+        openaiApiEndpoint={openaiApiEndpoint}
+        openaiApiPath={openaiApiPath}
+        contextText={
+          [
+            `Hexo 项目路径: ${hexoPath || '(未选择)'}`,
+            language === 'zh' ? '当前视图: ' : 'Current view: ',
+            language === 'zh' ? '最近操作日志:' : 'Recent operation logs:',
+            ...commandLogs.slice(-10).map((log) => `[${log.timestamp || ''}] ${log.command || ''} ${log.success ? 'OK' : 'FAILED'}`),
+          ].join('\n')
+        }
       />
 
       {/* 图片引用选择对话框 */}
