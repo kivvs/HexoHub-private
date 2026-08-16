@@ -47,7 +47,7 @@ export function CreateHexoDialog({ onCreateSuccess, children, language }: Create
   const [commandOutput, setCommandOutput] = useState<string>('');
   const [hexoInstalled, setHexoInstalled] = useState<boolean>(false);
   const [hexoVersion, setHexoVersion] = useState<string>('');
-  const [npmInstalled, setNpmInstalled] = useState<boolean>(false);
+  const [pnpmInstalled, setPnpmInstalled] = useState<boolean>(false);
   const [gitInstalled, setGitInstalled] = useState<boolean>(false);
   const [isCheckingEnvironment, setIsCheckingEnvironment] = useState<boolean>(true);
   const [hasWarning, setHasWarning] = useState<boolean>(false);
@@ -71,21 +71,21 @@ export function CreateHexoDialog({ onCreateSuccess, children, language }: Create
     try {
       const ipcRenderer = await getIpcRenderer();
 
-      // 检查npm
-      setCommandOutput(prev => prev + '\n' + t.checkingNpm);
-      const npmResult = await ipcRenderer.invoke('execute-command', 'npm -v');
-      if (npmResult.success && npmResult.stdout && npmResult.stdout.trim()) {
-        setNpmInstalled(true);
+      // 检查 pnpm
+      setCommandOutput(prev => prev + '\n' + t.checkingPnpm);
+      const pnpmResult = await ipcRenderer.invoke('execute-command', 'pnpm -v');
+      if (pnpmResult.success && pnpmResult.stdout && pnpmResult.stdout.trim()) {
+        setPnpmInstalled(true);
         // 过滤掉 "Active code page: 65001" 等无关输出
-        const cleanOutput = npmResult.stdout
+        const cleanOutput = pnpmResult.stdout
           .split('\n')
           .filter(line => !line.includes('Active code page') && line.trim())
           .join('\n')
           .trim();
-        setCommandOutput(prev => prev + '\n' + t.npmInstalled.replace('{version}', cleanOutput));
+        setCommandOutput(prev => prev + '\n' + t.pnpmInstalled.replace('{version}', cleanOutput));
       } else {
-        const errorMsg = (npmResult.error || npmResult.stderr || '命令执行失败，请确保 npm 已安装并在 PATH 环境变量中').trim();
-        setCommandOutput(prev => prev + '\n' + t.npmNotInstalled.replace('{error}', errorMsg || '未知错误'));
+        const errorMsg = (pnpmResult.error || pnpmResult.stderr || '命令执行失败，请确保 pnpm 已安装并在 PATH 环境变量中').trim();
+        setCommandOutput(prev => prev + '\n' + t.pnpmNotInstalled.replace('{error}', errorMsg || '未知错误'));
       }
 
       // 检查git
@@ -167,10 +167,10 @@ export function CreateHexoDialog({ onCreateSuccess, children, language }: Create
 
   const createHexoProject = async () => {
     if (!isDesktopApp()) return;
-    if (!npmInstalled) {
+    if (!pnpmInstalled) {
       toast({
         title: t.missingDependency,
-        description: t.pleaseInstallNpm,
+        description: t.pleaseInstallPnpm,
         variant: 'error',
       });
       return;
@@ -210,7 +210,7 @@ export function CreateHexoDialog({ onCreateSuccess, children, language }: Create
       if (useTaobaoMirror) {
         setProgress(10);
         setCommandOutput(prev => prev + t.settingTaobaoMirror);
-        const mirrorResult = await ipcRenderer.invoke('execute-command', 'npm config set registry https://registry.npmmirror.com');
+        const mirrorResult = await ipcRenderer.invoke('execute-command', 'pnpm config set registry https://registry.npmmirror.com');
         if (!mirrorResult.success) {
           throw new Error(`${t.settingTaobaoMirror}: ${mirrorResult.stderr || mirrorResult.error}`);
         }
@@ -221,7 +221,7 @@ export function CreateHexoDialog({ onCreateSuccess, children, language }: Create
       if (!hexoInstalled) {
         setProgress(20);
         setCommandOutput(prev => prev + '\n' + t.installingHexoCli);
-        const installHexoResult = await ipcRenderer.invoke('execute-command', 'npm install -g hexo-cli');
+        const installHexoResult = await ipcRenderer.invoke('execute-command', 'pnpm add -g hexo-cli');
         if (!installHexoResult.success) {
           throw new Error(`${t.installingHexoCli}: ${installHexoResult.stderr || installHexoResult.error}`);
         }

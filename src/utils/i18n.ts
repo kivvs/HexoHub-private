@@ -406,7 +406,7 @@ export interface I18nTexts {
   close: string;
   createProject: string;
   hexoAlreadyInstalled: string;
-  installNpmAndGitFirst: string;
+  installPnpmAndGitFirst: string;
   settingTaobaoMirror: string;
   taobaoMirrorSetSuccess: string;
   installingHexoCli: string;
@@ -421,11 +421,11 @@ export interface I18nTexts {
   hexoProjectCreatedSuccessfully: string;
   createFailed: string;
   missingDependency: string;
-  pleaseInstallNpm: string;
+  pleaseInstallPnpm: string;
   pleaseInstallGit: string;
-  checkingNpm: string;
-  npmInstalled: string;
-  npmNotInstalled: string;
+  checkingPnpm: string;
+  pnpmInstalled: string;
+  pnpmNotInstalled: string;
   checkingGit: string;
   gitInstalled: string;
   gitNotInstalled: string;
@@ -878,7 +878,7 @@ console.log('Hello, Hexo!');
     createProject: '创建项目',
     hexoAlreadyInstalled: 'Hexo 已安装 (版本: {version})，将跳过 Hexo 安装步骤',
     hexoNotInstalled: 'Hexo 未安装，将自动安装 Hexo',
-    installNpmAndGitFirst: '请先安装 npm 和 git',
+    installPnpmAndGitFirst: '请先安装 pnpm 和 git',
     settingTaobaoMirror: '设置淘宝镜像源...',
     taobaoMirrorSetSuccess: '淘宝镜像源设置成功',
     installingHexoCli: '安装 hexo-cli...',
@@ -893,11 +893,11 @@ console.log('Hello, Hexo!');
     hexoProjectCreatedSuccessfully: 'Hexo 项目已成功创建',
     createFailed: '创建失败',
     missingDependency: '缺少依赖',
-    pleaseInstallNpm: '请先安装 npm',
+    pleaseInstallPnpm: '请先安装 pnpm',
     pleaseInstallGit: '请先安装 git',
-    checkingNpm: '检查 npm...',
-    npmInstalled: 'npm 已安装: {version}',
-    npmNotInstalled: 'npm 未安装: {error}',
+    checkingPnpm: '检查 pnpm...',
+    pnpmInstalled: 'pnpm 已安装: {version}',
+    pnpmNotInstalled: 'pnpm 未安装: {error}',
     checkingGit: '检查 git...',
     gitInstalled: 'git 已安装: {version}',
     gitNotInstalled: 'git 未安装: {error}',
@@ -1348,7 +1348,7 @@ console.log('Hello, Hexo!');
     createProject: 'Create Project',
     hexoAlreadyInstalled: 'Hexo is already installed (version: {version}), will skip Hexo installation',
     hexoNotInstalled: 'Hexo is not installed, will install Hexo automatically',
-    installNpmAndGitFirst: 'Please install npm and git first',
+    installPnpmAndGitFirst: 'Please install pnpm and git first',
     settingTaobaoMirror: 'Setting Taobao mirror...',
     taobaoMirrorSetSuccess: 'Taobao mirror set successfully',
     installingHexoCli: 'Installing hexo-cli...',
@@ -1363,11 +1363,11 @@ console.log('Hello, Hexo!');
     hexoProjectCreatedSuccessfully: 'Hexo project created successfully',
     createFailed: 'Create Failed',
     missingDependency: 'Missing Dependency',
-    pleaseInstallNpm: 'Please install npm first',
+    pleaseInstallPnpm: 'Please install pnpm first',
     pleaseInstallGit: 'Please install git first',
-    checkingNpm: 'Checking npm...',
-    npmInstalled: 'npm installed: {version}',
-    npmNotInstalled: 'npm not installed: {error}',
+    checkingPnpm: 'Checking pnpm...',
+    pnpmInstalled: 'pnpm installed: {version}',
+    pnpmNotInstalled: 'pnpm not installed: {error}',
     checkingGit: 'Checking git...',
     gitInstalled: 'git installed: {version}',
     gitNotInstalled: 'git not installed: {error}',

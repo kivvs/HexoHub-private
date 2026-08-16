@@ -36,10 +36,12 @@ interface ThemeEntry {
   version?: string;
   isValidHexo: boolean;
   frameworkHint?: string;
-  // 主题 peerDependencies 中声明的 hexo 渲染器（如 hexo-renderer-pug / hexo-renderer-sass）
+  // 主题 dependencies / peerDependencies 中声明的 hexo 渲染器（如 hexo-renderer-pug / hexo-renderer-sass）
   requiredRenderers: string[];
-  // 主题 scripts 目录 require 的第三方运行时依赖（如 js-yaml），缺失会导致 helper 未注册而白屏
+  // 主题 scripts 目录 require 及 dependencies 声明的第三方运行时依赖（如 js-yaml），缺失会导致 helper 未注册而白屏
   requiredScriptDeps: string[];
+  // 主题 optionalDependencies 中声明的可选依赖（尽力安装，失败不阻塞切换）
+  optionalDeps: string[];
 }
 
 export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProps) {
@@ -93,7 +95,7 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
     ipcRenderer: any,
     pkgPath: string,
     fallbackName: string
-  ): Promise<{ hasPackageJson: boolean; packageName?: string; version?: string; peerDependencies?: Record<string, string> }> => {
+  ): Promise<{ hasPackageJson: boolean; packageName?: string; version?: string; peerDependencies?: Record<string, string>; dependencies?: Record<string, string>; optionalDependencies?: Record<string, string> }> => {
     try {
       const pkgContent = await ipcRenderer.invoke('read-file', pkgPath);
       try {
@@ -103,6 +105,8 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
           packageName: pkg.name || fallbackName,
           version: pkg.version,
           peerDependencies: pkg.peerDependencies,
+          dependencies: pkg.dependencies,
+          optionalDependencies: pkg.optionalDependencies,
         };
       } catch {
         return { hasPackageJson: true, packageName: fallbackName };
@@ -140,10 +144,18 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
       // 忽略
     }
     const isValidHexo = hasLayout || hasEjsOrPug;
-    // 主题声明但项目可能未安装的渲染器依赖（缺失会导致模板源码直接输出，即"白屏"）
-    const requiredRenderers = Object.keys(info.peerDependencies || {}).filter((k) => k.startsWith('hexo-renderer-'));
+    // 主题声明的必需依赖来源：dependencies + peerDependencies（缺失会导致模板源码直接输出，即"白屏"）
+    const requiredDeps: Record<string, string> = {
+      ...(info.dependencies || {}),
+      ...(info.peerDependencies || {}),
+    };
+    const requiredRenderers = Object.keys(requiredDeps).filter((k) => k.startsWith('hexo-renderer-'));
+
+    // 可选依赖（optionalDependencies）：如 redefine 的 nodejieba、fluid 的 css 等，尽力安装，失败不阻塞切换
+    const optionalDeps = Object.keys(info.optionalDependencies || {}).filter((k) => k !== 'hexo');
 
     // 扫描主题 scripts 目录，收集 require 的第三方运行时依赖（排除相对路径、Node 内置模块、hexo 自身）
+    // 只识别“顶层 require”（行首无缩进），避免把函数内部 / try-catch 中的懒加载依赖重复计入。
     const requiredScriptDeps: string[] = [];
     const builtinModules = new Set([
       'fs', 'path', 'url', 'util', 'os', 'crypto', 'stream', 'events', 'child_process',
@@ -164,15 +176,21 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
           } else if (f.name.endsWith('.js')) {
             try {
               const js = await ipcRenderer.invoke('read-file', f.path);
+              const lines = js.split(/\r?\n/);
               const re = /require\(\s*["']([^"']+)["']\s*\)/g;
-              let m: RegExpExecArray | null;
-              while ((m = re.exec(js)) !== null) {
-                const spec = m[1];
-                if (!spec || spec.startsWith('.') || spec.startsWith('/') || spec.startsWith('#')) continue;
-                // 作用域包取前两段，普通包取第一段
-                const pkg = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];
-                if (!builtinModules.has(pkg) && pkg !== 'hexo' && !pkg.startsWith('hexo-')) {
-                  if (!requiredScriptDeps.includes(pkg)) requiredScriptDeps.push(pkg);
+              for (const line of lines) {
+                // 跳过带缩进的行（函数体、if/try 块内的懒加载依赖）
+                if (line.trimStart() !== line) continue;
+
+                let m: RegExpExecArray | null;
+                while ((m = re.exec(line)) !== null) {
+                  const spec = m[1];
+                  if (!spec || spec.startsWith('.') || spec.startsWith('/') || spec.startsWith('#')) continue;
+                  // 作用域包取前两段，普通包取第一段
+                  const pkg = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];
+                  if (!builtinModules.has(pkg) && pkg !== 'hexo' && !pkg.startsWith('hexo-')) {
+                    if (!requiredScriptDeps.includes(pkg)) requiredScriptDeps.push(pkg);
+                  }
                 }
               }
             } catch {
@@ -186,6 +204,13 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
       // 忽略 scripts 目录扫描失败
     }
 
+    // 把主题 package.json 中声明的非渲染器运行时依赖也纳入必需安装（如 js-yaml、lodash 等第三方库）
+    for (const pkg of Object.keys(requiredDeps)) {
+      if (pkg.startsWith('hexo-renderer-') || pkg === 'hexo' || pkg.startsWith('hexo-')) continue;
+      if (builtinModules.has(pkg)) continue;
+      if (!requiredScriptDeps.includes(pkg)) requiredScriptDeps.push(pkg);
+    }
+
     return {
       name,
       configName: name,
@@ -197,6 +222,7 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
       version: info.version,
       requiredRenderers,
       requiredScriptDeps,
+      optionalDeps,
     };
   };
 
@@ -269,6 +295,7 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
 
   // 自动安装主题缺失的渲染器与脚本运行时依赖（如 hexo-renderer-pug / hexo-renderer-sass / js-yaml）
   // 缺失渲染器会导致 Hexo 把模板源码直接输出（即"白屏"）；缺失脚本依赖会导致主题 helper 未注册而白屏
+  // 优先使用 pnpm（兼容项目 pnpm-lock.yaml），不可用时回退到 npm。
   const ensureThemeRenderers = async (ipcRenderer: any, entry: ThemeEntry, onProgress: (msg: string) => void) => {
     const missing = new Set<string>();
     for (const renderer of entry.requiredRenderers) {
@@ -281,21 +308,55 @@ export function BlogThemePanel({ hexoPath, language = 'zh' }: BlogThemePanelProp
         missing.add(dep);
       }
     }
-    if (missing.size === 0) return;
 
-    // 与创建项目/安装部署插件保持一致的 npm 用法：--prefix 指定工作目录，避免 cd && 的跨平台问题
+    // 可选依赖：尽力安装，失败仅提示、不阻塞切换
+    const optionalToInstall: string[] = [];
+    for (const dep of entry.optionalDeps) {
+      if (!missing.has(dep) && !(await hasRenderer(ipcRenderer, dep))) {
+        optionalToInstall.push(dep);
+      }
+    }
+
+    if (missing.size === 0 && optionalToInstall.length === 0) return;
+
+    // 检测包管理器：项目有 pnpm-lock.yaml 则用 pnpm；否则用 npm。
+    let packageManager: 'pnpm' | 'npm' = 'npm';
+    try {
+      const lockFiles = await ipcRenderer.invoke('list-files', hexoPath);
+      const names = Array.isArray(lockFiles) ? lockFiles.map((f: any) => f.name.toLowerCase()) : [];
+      packageManager = names.includes('pnpm-lock.yaml') ? 'pnpm' : 'npm';
+    } catch {
+      packageManager = 'npm';
+    }
+
+    const buildInstallCmd = (pkg: string) =>
+      packageManager === 'pnpm'
+        ? `pnpm --dir ${hexoPath} add ${pkg}`
+        : `npm install ${pkg} --save --prefix ${hexoPath}`;
+
     for (const pkgName of missing) {
-      onProgress(zh ? `检测到主题需要依赖 ${pkgName}，正在自动安装...` : `Installing required dependency ${pkgName}...`);
-      const installResult = await ipcRenderer.invoke('execute-command', `npm install ${pkgName} --save --prefix ${hexoPath}`);
+      onProgress(zh ? `检测到主题需要依赖 ${pkgName}，正在自动安装（${packageManager}）...` : `Installing required dependency ${pkgName} with ${packageManager}...`);
+      const installResult = await ipcRenderer.invoke('execute-command', buildInstallCmd(pkgName));
       if (!installResult.success) {
         // 失败后清理缓存重试一次
-        await ipcRenderer.invoke('execute-command', 'npm cache clean --force');
-        const retryResult = await ipcRenderer.invoke('execute-command', `npm install ${pkgName} --save --prefix ${hexoPath}`);
+        await ipcRenderer.invoke('execute-command', packageManager === 'pnpm' ? 'pnpm store prune' : 'npm cache clean --force');
+        const retryResult = await ipcRenderer.invoke('execute-command', buildInstallCmd(pkgName));
         if (!retryResult.success) {
           throw new Error(
             `安装依赖 ${pkgName} 失败: ${retryResult.stderr || retryResult.error || retryResult.stdout || '未知错误'}`
           );
         }
+      }
+    }
+
+    // 安装可选依赖（如 nodejieba、css 等），失败仅提示跳过，不影响主题切换
+    for (const pkgName of optionalToInstall) {
+      onProgress(zh ? `检测到可选依赖 ${pkgName}，正在尽力安装（${packageManager}）...` : `Installing optional dependency ${pkgName} with ${packageManager}...`);
+      const installResult = await ipcRenderer.invoke('execute-command', buildInstallCmd(pkgName));
+      if (!installResult.success) {
+        onProgress(zh
+          ? `可选依赖 ${pkgName} 安装失败，已跳过（不影响主题切换）: ${installResult.stderr || installResult.error || installResult.stdout || '未知错误'}`
+          : `Optional dependency ${pkgName} install failed; skipped (won't block theme switch): ${installResult.stderr || installResult.error || installResult.stdout || 'unknown error'}`);
       }
     }
   };
